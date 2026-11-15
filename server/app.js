@@ -86,7 +86,9 @@ function createApp({ config, token }) {
       const tok = await tokens.summaryForState(activeSessions);
       return send(res, 200, {
         root: config.root, host: sessions.hostname, idleSeconds: config.idleSeconds,
-        agents: config.agents.map((a) => ({ id: a.id, name: a.name })), personalSkillsDir: config.personalSkillsDir,
+        agents: config.agents.map((a) => ({ id: a.id, name: a.name })),
+        personalSkillsDir: config.personalSkillsDir,
+        personalSkillsDirs: config.personalSkillsDirs || (config.personalSkillsDir ? [config.personalSkillsDir] : []),
         repos: data.repos, skipped: data.skipped, error: data.error,
         sessions: activeSessions.map((s) => (s.kind === 'agent' ? { ...s, tokens: tok.sessionTokens[s.id] || null } : s)),
         tokenSummary: tok.tokenSummary,

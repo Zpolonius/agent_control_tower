@@ -44,10 +44,15 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
   "brainPaths": ["docs", "CLAUDE.md", "AGENTS.md", ".claude"],
   "agents": [
     { "id": "claude", "name": "Claude Code", "command": "claude" },
-    { "id": "anden", "name": "Anden agent", "command": "din-agent-kommando" }
+    { "id": "gemini", "name": "Gemini", "command": "agy" }
   ],
   "idleSeconds": 8,
-  "maxSessions": 12
+  "maxSessions": 12,
+  "personalSkillsDirs": [
+    "~/.claude/skills",
+    "~/.gemini/skills",
+    "~/.agents/skills"
+  ]
 }
 ```
 
@@ -69,9 +74,58 @@ Fanen Issues viser repoets åbne GitHub-issues (via `gh`). Åbn et issue, og sen
 
 ## Skills
 
-Fanen Skills i et repo viser repoets egne skills (`.claude/skills` og ældre `.claude/commands`) og dine personlige (`~/.claude/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget, fordi Claude Code bruger den personlige.
+Fanen Skills i et repo viser repoets egne skills (`.claude/skills`, `.gemini/skills`, `.agents/skills` samt ældre `.claude/commands` / `.gemini/commands`) og dine personlige (`~/.claude/skills`, `~/.gemini/skills`, `~/.agents/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget.
 
-Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Stien til personlige skills kan ændres med `personalSkillsDir` i indstillingsfilen.
+Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Når du har flere personlige skill-mapper, kan du i formularen vælge, hvilken mappe en ny personlig skill skal gemmes i.
+
+### Sådan tilføjer du ekstra skill-mapper (Windows og Mac)
+
+Har du skills liggende i en eller flere egne mapper på tværs af projekter, kan du tilføje dem i `personalSkillsDirs` i `control-tower.config.json`:
+
+```json
+{
+  "personalSkillsDirs": [
+    "~/.claude/skills",
+    "~/.gemini/skills",
+    "~/.agents/skills",
+    "~/mine-skills"
+  ]
+}
+```
+
+- `~/` udvides automatisk til din hjemmemappe på både **Mac** og **Windows**.
+- Du kan også angive fulde stier:
+  - **Mac**: `"/Users/dit-navn/mine-skills"`
+  - **Windows**: `"C:\\Users\\dit-navn\\mine-skills"`
+- Inde i hver mappe skal hver skill ligge i sin egen undermappe med en `SKILL.md`-fil:
+  ```text
+  mine-skills/
+  ├── min-foerste-skill/
+  │   └── SKILL.md
+  └── min-anden-skill/
+      └── SKILL.md
+  ```
+- Genstart Control Tower efter ændring af `control-tower.config.json`.
+
+### Del en ekstra skill-mappe direkte med både Claude Code og Gemini (`agy`)
+
+`personalSkillsDirs` gør, at Control Tower kan vise og bruge dine skills fra ekstra mapper. Vil du også have, at selve **Claude Code** og **Gemini (`agy`)** i terminalen automatisk indlæser skills fra en fælles mappe (fx `~/mine-skills`) uden at kopiere dem, kan du linke dem ind i agenternes standardmapper:
+
+**Mac (Terminal):**
+```bash
+ln -s ~/mine-skills/* ~/.claude/skills/
+ln -s ~/mine-skills/* ~/.gemini/skills/
+```
+
+**Windows (PowerShell):**
+```powershell
+Get-ChildItem "$HOME\mine-skills" -Directory | ForEach-Object {
+  New-Item -ItemType Junction -Path "$HOME\.claude\skills\$($_.Name)" -Target $_.FullName -ErrorAction SilentlyContinue
+  New-Item -ItemType Junction -Path "$HOME\.gemini\skills\$($_.Name)" -Target $_.FullName -ErrorAction SilentlyContinue
+}
+```
+
+Control Tower frasorterer automatisk dubletter via filernes reelle sti (`realpath`), så hver skill kun vises én gang i oversigten, selvom den er linket ind i flere mapper.
 
 ## Token-regnskab
 

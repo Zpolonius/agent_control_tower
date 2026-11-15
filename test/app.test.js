@@ -400,6 +400,47 @@ test('skills: en manglende personlig mappe giver bare en tom liste', () => {
   assert.deepEqual(s.project(path.join(tmp, 'findes-heller-ikke')), []);
   assert.equal(cfg.clean({}).personalSkillsDir, path.join(os.homedir(), '.claude', 'skills'));
   assert.equal(cfg.clean({ personalSkillsDir: 'relativ/sti' }).personalSkillsDir, path.join(os.homedir(), '.claude', 'skills'));
+  assert.deepEqual(cfg.clean({}).personalSkillsDirs, [
+    path.join(os.homedir(), '.claude', 'skills'),
+    path.join(os.homedir(), '.gemini', 'skills'),
+    path.join(os.homedir(), '.agents', 'skills'),
+  ]);
+});
+
+test('skills: henter fra flere personlige mapper samt .gemini og .agents i et repo', () => {
+  const { createSkills } = require('../server/skills');
+  const dirClaude = path.join(tmp, 'multi-claude', '.claude', 'skills');
+  const dirGemini = path.join(tmp, 'multi-gemini', '.gemini', 'skills');
+  const dirCustom = path.join(tmp, 'mine-egne-skills');
+  const repoMulti = path.join(tmp, 'repo-multi');
+  const mk = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+  mk(path.join(dirClaude, 'claude-skill', 'SKILL.md'), '---\nname: claude-skill\ndescription: Fra Claude\n---\nClaude body');
+  mk(path.join(dirGemini, 'gemini-skill', 'SKILL.md'), '---\nname: gemini-skill\ndescription: Fra Gemini\n---\nGemini body');
+  mk(path.join(dirCustom, 'delt-skill', 'SKILL.md'), '---\nname: delt-skill\ndescription: Fra egen mappe\n---\nDelt body');
+  mk(path.join(repoMulti, '.claude', 'skills', 'c-proj', 'SKILL.md'), '---\nname: c-proj\ndescription: Claude proj\n---\nC');
+  mk(path.join(repoMulti, '.gemini', 'skills', 'g-proj', 'SKILL.md'), '---\nname: g-proj\ndescription: Gemini proj\n---\nG');
+  mk(path.join(repoMulti, '.agents', 'skills', 'a-proj', 'SKILL.md'), '---\nname: a-proj\ndescription: Agents proj\n---\nA');
+
+  const cleaned = cfg.clean({ personalSkillsDirs: [dirClaude, dirGemini, dirCustom, dirClaude, 'relativ/ignoreres'] });
+  assert.deepEqual(cleaned.personalSkillsDirs, [dirClaude, dirGemini, dirCustom]);
+  const s = createSkills(cleaned);
+  const pers = s.personal();
+  assert.deepEqual(pers.map((x) => [x.name, x.id, x.dirLabel]), [
+    ['claude-skill', 'claude-skill/SKILL.md', 'Claude (~/.claude/skills)'],
+    ['delt-skill', '2:delt-skill/SKILL.md', 'mine-egne-skills'],
+    ['gemini-skill', '1:gemini-skill/SKILL.md', 'Gemini (~/.gemini/skills)'],
+  ]);
+  assert.equal(s.read('personal', null, '1:gemini-skill/SKILL.md').content, 'Gemini body');
+  assert.equal(s.read('personal', null, '2:delt-skill/SKILL.md').content, 'Delt body');
+
+  const proj = s.project(repoMulti);
+  assert.deepEqual(proj.map((x) => [x.name, x.id, x.dirLabel]), [
+    ['a-proj', '.agents/skills/a-proj/SKILL.md', 'Delt (.agents)'],
+    ['c-proj', 'skills/c-proj/SKILL.md', null],
+    ['g-proj', '.gemini/skills/g-proj/SKILL.md', 'Gemini (.gemini)'],
+  ]);
+  assert.equal(s.read('project', repoMulti, '.gemini/skills/g-proj/SKILL.md').content, 'G');
+  assert.equal(s.read('project', repoMulti, '.agents/skills/a-proj/SKILL.md').content, 'A');
 });
 
 test('issues: læser åbne issues via gh, afviser snydenumre og forklarer når gh mangler', async () => {
