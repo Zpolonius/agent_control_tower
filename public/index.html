@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control Tower</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Spring til indhold</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="beacon" aria-hidden="true"><i></i><i></i></span>
+      <div>
+        <h1>Control Tower</h1>
+        <p class="root" id="root" title=""></p>
+      </div>
+    </div>
+    <ul class="summary" id="summary" aria-label="Samlet status"></ul>
+    <div class="topactions">
+      <button class="btn ghost" id="notifybtn" type="button" aria-pressed="false">Beskeder: fra</button>
+      <button class="btn ghost" id="soundbtn" type="button" aria-pressed="false">Lyd: fra</button>
+      <button class="btn ghost" id="refresh" type="button">Opdater</button>
+    </div>
+  </header>
+  <div class="banner" id="banner" role="alert" hidden></div>
+  <p class="sr" id="announce" role="status"></p>
+  <div class="layout">
+    <nav class="sidebar" aria-label="Repos">
+      <label class="filter"><span class="sr">Filtrer repos</span>
+        <input id="filter" type="search" placeholder="Filtrer repos…" autocomplete="off" spellcheck="false">
+      </label>
+      <button class="navhome" id="home" type="button">Overblik</button>
+      <button class="navhome" id="skillsnav" type="button">Skills</button>
+      <ul class="repolist" id="repolist"></ul>
+      <p class="hint" id="skipped"></p>
+    </nav>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/md.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

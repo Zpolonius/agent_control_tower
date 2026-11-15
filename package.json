@@ -1,0 +1,21 @@
+{
+  "name": "control-tower",
+  "version": "1.0.0",
+  "description": "Lokalt kontroltårn til kodeagenter og repos",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.23.0"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+control-tower.config.json
+*.log
+.DS_Store
