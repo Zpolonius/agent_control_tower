@@ -64,6 +64,12 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
 
 Øverst står altid det næste skridt: hvilken agent der venter på dig, eller at alt kører. Under "Arbejdspladser" har hver agent en figur ved et skrivebord: den skriver når den arbejder, rækker hånden op når den venter, og taleboblen viser den seneste linje fra agenten. Taleboblen er et skøn – agenter der tegner hele skærmen om, kan vise en bundlinje i stedet for en besked. "Start agent" på et repo-kort starter den første agent på din liste.
 
+## Mission Control og Split-Screen
+
+- **Mission Control (`#page=mission`)**: Punktet *Mission Control* i venstremenuen viser alle aktive agenter og terminaler på tværs af repos i et live multi-terminal grid, hvor du kan skrive direkte i hver terminal, godkende hurtig-svar (`Enter` / `y` / `Esc`) og skifte mellem 1 eller 2 kolonner.
+- **Split-fane i et repo (`◫ Split`)**: Når et repo har 2 eller flere sessioner kørende, vises fanen *◫ Split (N)*, som samler repoets egne terminaler side om side.
+- **Del skærm i en terminal (`◫ Del skærm`)**: Inde i enhver terminalvisning kan du i topbaren vælge en anden session til at åbne side om side (50/50 split), bytte sider (`⇄ Byt side`) eller maksimere den ene (`⤢ Kun denne`).
+
 ## Resumé af agentens arbejde
 
 Når en agent venter eller er færdig, viser dens kort og terminalvisning et resumé: hvor længe den kørte, nye commits, og hvilke filer der er ændret siden start. Filer du selv havde ændret, før agenten startede, markeres. Resuméet bygger kun på git og kalder ingen model, så det viser alt der er ændret i repoet i perioden – også det du selv eller en anden agent har lavet imens. Knappen "Bed om resumé" indsætter et spørgsmål hos agenten, hvis du vil have dens egen forklaring i ord.
