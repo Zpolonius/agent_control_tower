@@ -18,6 +18,21 @@ Programmet åbner selv din browser. Linket i terminalen indeholder en nøgle, so
 
 `npm start -- --help` viser tilvalgene. `--no-open` starter uden at åbne browseren.
 
+## Start uden VS Code (Windows og Mac)
+
+Du behøver ikke have VS Code eller en terminal åben for at bruge Control Tower. Kør én gang for at oprette genvej/app:
+
+```bash
+npm run shortcut
+```
+
+- **Windows**: Opretter en **Control Tower**-genvej på Skrivebordet og i Start-menuen (du kan også dobbeltklikke på `Opret genvej (Windows).cmd` eller starte direkte med `Start Control Tower.vbs`). Control Tower kører stille i systembakken ved uret:
+  - Venstreklik på ikonet for at åbne browseren (dobbeltklik på genvejen igen gør det samme).
+  - Højreklik på ikonet for at kopiere link, se log, redigere indstillinger, genstarte, slå "Start automatisk med Windows" til/fra eller afslutte pænt.
+- **Mac**: Opretter `~/Applications/Control Tower.app` og en genvej på Skrivebordet (du kan også dobbeltklikke på `Opret app (Mac).command`, eller køre `Start Control Tower.command` direkte). Start via Spotlight (`Cmd+Mellemrum` -> `Control Tower`) eller træk appen til Docken:
+  - Klik på ikonet i Docken (eller Spotlight) for at genåbne browseren.
+  - Brug `Cmd+Q` (eller højreklik i Docken -> Slut) for at stoppe Control Tower pænt.
+
 ## Indstillinger
 
 Første start opretter `control-tower.config.json` (filen er ikke med i git). En eksisterende fil bliver aldrig overskrevet – kun `root` ændres, hvis du starter med en ny sti.
