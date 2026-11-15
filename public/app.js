@@ -18,9 +18,32 @@
   }
 
   const state = {
-    data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false,
+    data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
     brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, stoppedByMe: new Set(), target: null, terms: new Map(),
   };
+
+  const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
+  const cacheTotal = (t) => (t ? (t.cacheRead || 0) + (t.cacheWrite || 0) : 0);
+  function fmtTok(n) {
+    const v = Number(n || 0);
+    if (v < 1000) return String(Math.round(v));
+    if (v < 1000000) return `${(v / 1000).toFixed(v < 10000 ? 1 : 0).replace('.', ',')}k`;
+    return `${(v / 1000000).toFixed(2).replace('.', ',')}M`;
+  }
+  function tokBreakdown(t) {
+    if (!t) return '';
+    const parts = [`Input: ${fmtInt(t.input)}`];
+    if (t.cacheRead) parts.push(`Cache læst: ${fmtInt(t.cacheRead)}`);
+    if (t.cacheWrite) parts.push(`Cache gemt: ${fmtInt(t.cacheWrite)}`);
+    parts.push(`Output: ${fmtInt(t.output)}`);
+    parts.push(`Total: ${fmtInt(t.total)}`);
+    return parts.join(' · ');
+  }
+  function sessionTokenLine(t) {
+    if (!t || !t.total) return '';
+    const c = cacheTotal(t);
+    return `${fmtTok(t.total)} tokens (${fmtTok(t.input)} ind${c ? ` · ${fmtTok(c)} cache` : ''} · ${fmtTok(t.output)} ud)`;
+  }
 
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
@@ -157,17 +180,42 @@
         h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
         h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) })),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
+        h('p', { class: 'desktokens', 'data-tokens': s.id, title: tokBreakdown(s.tokens), text: sessionTokenLine(s.tokens) }),
         s.status === 'arbejder' || s.status === 'afventer' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
       h('button', { type: 'button', class: `btn ${s.status === 'venter' ? 'primary' : ''}`, 'data-key': `desk:${s.id}`,
         'aria-label': `${action}: ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, action));
   }
 
-  // Opdaterer kun tekst (taleboble og tid) i de kort der allerede står på siden, så animationerne ikke starter forfra.
+  // Opdaterer kun tekst (taleboble, tid og tokens) i de kort der allerede står på siden, så animationerne ikke starter forfra.
   function updateLiveText() {
     if (!state.data) return;
+    const total = state.data.tokenSummary && state.data.tokenSummary.total;
+    for (const n of document.querySelectorAll('[data-totaltok]')) {
+      const txt = total ? fmtTok(total.total) : '0';
+      if (n.textContent !== txt) n.textContent = txt;
+      if (total && n.parentElement) n.parentElement.title = tokBreakdown(total);
+    }
+    const byRepo = (state.data.tokenSummary && state.data.tokenSummary.byRepo) || {};
+    for (const n of document.querySelectorAll('[data-repotok]')) {
+      const rt = byRepo[n.dataset.repotok];
+      const txt = rt && rt.total ? `${fmtTok(rt.total)} tokens` : '';
+      if (n.textContent !== txt) n.textContent = txt;
+      n.title = tokBreakdown(rt);
+      n.hidden = !txt;
+    }
     for (const s of state.data.sessions) {
       for (const n of document.querySelectorAll(`[data-line="${s.id}"]`)) { const t = bubbleText(s); if (n.textContent !== t) n.textContent = t; }
       for (const n of document.querySelectorAll(`[data-time="${s.id}"]`)) { const t = timeText(s); if (n.textContent !== t) n.textContent = t; }
+      for (const n of document.querySelectorAll(`[data-tokens="${s.id}"]`)) {
+        const t = sessionTokenLine(s.tokens);
+        if (n.textContent !== t) n.textContent = t;
+        n.title = tokBreakdown(s.tokens);
+      }
+      for (const n of document.querySelectorAll(`[data-tokenchip="${s.id}"]`)) {
+        const t = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
+        if (n.textContent !== t) n.textContent = t;
+        n.title = tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu';
+      }
     }
   }
 
@@ -457,6 +505,7 @@
     const waiting = d.sessions.filter((s) => s.status === 'venter').length;
     const ready = d.sessions.filter((s) => s.status === 'faerdig').length;
     const dirty = d.repos.filter((r) => r.changed + r.untracked > 0).length;
+    const totalTok = d.tokenSummary && d.tokenSummary.total;
     document.title = tabTitle(d.sessions);
     $('summary').replaceChildren(...[
       h('li', {}, h('strong', { text: String(d.repos.length) }), ' repos'),
@@ -465,12 +514,17 @@
       extWaiting ? h('li', { class: 'extwait' }, h('strong', { text: String(extWaiting) }), ' venter på andet') : null,
       h('li', { class: waiting ? 'wait' : '' }, h('strong', { text: String(waiting) }), ' venter på dig'),
       ready ? h('li', { class: 'ready' }, h('strong', { text: String(ready) }), ready === 1 ? ' færdig' : ' færdige') : null,
+      totalTok ? h('li', { class: 'tokpill' }, h('button', {
+        type: 'button', class: 'summarybtn', 'data-key': 'top:tokens',
+        title: tokBreakdown(totalTok), onclick: () => go(null, null, 'tokens'),
+      }, h('strong', { 'data-totaltok': '1', text: fmtTok(totalTok.total) }), ' tokens')) : null,
     ].filter(Boolean));
     const f = state.filter.trim().toLowerCase();
     const repos = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
     const cur = (el, on) => { if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
     cur($('home'), !state.repo && state.page === 'home');
     cur($('skillsnav'), !state.repo && state.page === 'skills');
+    cur($('tokensnav'), !state.repo && state.page === 'tokens');
     $('repolist').replaceChildren(...repos.map((r) => {
       const ss = sessionsFor(r.name).filter((s) => s.status !== 'afsluttet');
       const n = r.changed + r.untracked;
@@ -514,6 +568,7 @@
       return;
     }
     if (!state.repo && state.page === 'skills') { main.replaceChildren(h('h2', { text: 'Skills' }), h('section', { id: 'panel', class: 'panel' })); skillsPanel($('panel'), null); return; }
+    if (!state.repo && state.page === 'tokens') { main.replaceChildren(h('h2', { text: 'Token-regnskab' }), h('section', { id: 'panel', class: 'panel' })); tokensPanel($('panel')); return; }
     if (!state.repo) { main.replaceChildren(dashboard()); return; }
     const repo = state.data.repos.find((r) => r.name === state.repo);
     // Mappen kan være slettet eller omdøbt, mens en agent stadig kører i den. Så vises kun dens sessioner.
@@ -573,7 +628,7 @@
   // Opdaterer kun det der ændrer sig løbende (status-mærker), så en åben terminal eller fil ikke bliver forstyrret.
   function renderLive() {
     if (!state.data) { renderMain(); return; }
-    if (!state.repo && state.page === 'skills') return;
+    if (!state.repo && (state.page === 'skills' || state.page === 'tokens')) return;
     if (!$('tabs') && !$('dash')) { renderMain(); return; }
     if (!state.repo) { $('main').replaceChildren(dashboard()); return; }
     renderTabs();
@@ -681,6 +736,8 @@
     wrap.append(h('ul', { class: 'cards' }, shown.map((r) => {
       const n = r.changed + r.untracked;
       const ss = sessionsFor(r.name).filter((s) => s.status !== 'afsluttet');
+      const rt = d.tokenSummary && d.tokenSummary.byRepo && d.tokenSummary.byRepo[r.name];
+      const tokChip = h('span', { class: 'chip', 'data-repotok': r.name, title: tokBreakdown(rt), hidden: !(rt && rt.total), text: rt && rt.total ? `${fmtTok(rt.total)} tokens` : '' });
       return h('li', { class: 'card' },
         h('span', { class: 'cardname', text: r.name }),
         h('span', { class: 'branch', text: branchText(r) }),
@@ -688,7 +745,8 @@
           n ? chip(`${n} ændringer`, 'warn') : chip('Rent', 'ok'),
           r.ahead ? chip(`${r.ahead} ikke pushet`, 'warn') : null,
           r.behind ? chip(`${r.behind} bagud`, 'warn') : null,
-          r.brainFiles ? chip(`Hjerne: ${r.brainFiles} filer`) : chip('Ingen hjerne', 'muted')),
+          r.brainFiles ? chip(`Hjerne: ${r.brainFiles} filer`) : chip('Ingen hjerne', 'muted'),
+          tokChip),
         h('span', { class: 'cardfoot', text: r.lastCommit ? `${r.lastCommit.subject} · ${ago(r.lastCommit.time)}` : 'Ingen commits endnu' }),
         ss.length ? h('span', { class: 'cardrow' }, ss.map(sessionBadge)) : null,
         h('span', { class: 'cardactions' },
@@ -699,6 +757,14 @@
   }
 
   // ---------- repo overblik ----------
+  function repoTokenFact(name) {
+    const rt = state.data.tokenSummary && state.data.tokenSummary.byRepo && state.data.tokenSummary.byRepo[name];
+    if (!rt || !rt.total) return 'Ingen registreret endnu';
+    const agents = Object.values(rt.byAgent || {}).filter((a) => a.total > 0).map((a) => `${a.name}: ${fmtTok(a.total)}`);
+    const c = cacheTotal(rt);
+    return `${fmtInt(rt.total)} (${fmtTok(rt.input)} ind${c ? `, ${fmtTok(c)} cache` : ''}, ${fmtTok(rt.output)} ud)${agents.length ? ` · ${agents.join(', ')}` : ''}`;
+  }
+
   function repoOverview() {
     const r = state.data.repos.find((x) => x.name === state.repo);
     if (!r) return h('div', {});
@@ -715,7 +781,8 @@
         fact('Ændringer', n ? [r.changed ? plural(r.changed, 'ændret fil', 'ændrede filer') : '', r.untracked ? plural(r.untracked, 'ny', 'nye') : ''].filter(Boolean).join(', ') : 'Ingen – arbejdsmappen er ren'),
         fact('I forhold til GitHub', r.detached ? 'Ikke på en branch' : !r.upstream ? 'Ligger kun på din computer (ikke sendt til GitHub)' : (r.ahead || r.behind ? `${r.ahead} ikke sendt, ${r.behind} bagud` : 'Synkroniseret')),
         fact('Sidste commit', r.lastCommit ? `${r.lastCommit.subject} (${ago(r.lastCommit.time)})` : 'Ingen commits endnu'),
-        fact('Hjerne', r.brainFiles ? `${r.brainFiles} filer` : 'Ingen docs-mappe eller CLAUDE.md fundet')),
+        fact('Hjerne', r.brainFiles ? `${r.brainFiles} filer` : 'Ingen docs-mappe eller CLAUDE.md fundet'),
+        fact('Token-forbrug', repoTokenFact(r.name))),
       ss.length ? h('h3', { text: 'Terminaler' }) : null,
       ss.length ? h('ul', { class: 'slist' }, ss.map((s) => sessionRow(s, false))) : null,
       all.length ? null : h('p', { class: 'empty', text: 'Ingen agenter i dette repo endnu. Start en med knapperne øverst – så dukker den op her.' }));
@@ -1183,7 +1250,11 @@
     if (hadFocus) { const b = box.querySelector('button'); if (b) b.focus(); }
   }
 
-  const termStatus = (s) => [sessionBadge(s)];
+  function termStatus(s) {
+    if (s.kind !== 'agent') return [sessionBadge(s)];
+    const txt = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
+    return [sessionBadge(s), h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt })];
+  }
 
   function termPanel(panel, id) {
     const s = state.data.sessions.find((x) => x.id === id);
@@ -1251,6 +1322,157 @@
     } catch (err) { toast(err.message, true); }
   }
 
+  // ---------- token-regnskab ----------
+  const PERIODS = [['today', 'I dag'], ['7d', '7 dage'], ['30d', '30 dage'], ['all', 'Altid']];
+
+  function barCell(part, total) {
+    const pct = total > 0 ? Math.round((part / total) * 100) : 0;
+    return h('div', { class: 'tokbarwrap' },
+      h('span', { class: 'tokbar', 'aria-hidden': 'true' }, h('i', { style: `width: ${pct}%` })),
+      h('span', { class: 'tokpct', text: `${pct}%` }));
+  }
+
+  function tokTable(headers, rows) {
+    return h('div', { class: 'tablewrap' }, h('table', { class: 'toktable' },
+      h('thead', {}, h('tr', {}, headers.map(([label, num]) => h('th', { class: num ? 'num' : '', text: label })))),
+      h('tbody', {}, rows)));
+  }
+
+  async function tokensPanel(panel, fresh) {
+    const still = () => !state.repo && state.page === 'tokens';
+    panel.className = 'panel';
+    panel.replaceChildren(h('p', { class: 'empty', text: 'Samler token-regnskab…' }));
+    let data;
+    try { data = await api(`/api/tokens?period=${encodeURIComponent(state.tokenPeriod)}${fresh ? '&fresh=1' : ''}`); } catch (err) {
+      if (still()) panel.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+      return;
+    }
+    if (!still()) return;
+
+    const bar = h('div', { class: 'panelbar' },
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Periode' },
+        PERIODS.map(([id, label]) => h('button', {
+          type: 'button', class: 'btn small', 'aria-pressed': String(state.tokenPeriod === id),
+          onclick: () => { state.tokenPeriod = id; tokensPanel(panel); },
+        }, label))),
+      h('button', { type: 'button', class: 'btn small', onclick: () => tokensPanel(panel, true) }, 'Opdater'));
+
+    const t = data.totals;
+    const cTot = cacheTotal(t);
+    const totalIn = t.input + cTot;
+    const hitPct = totalIn > 0 ? Math.round((t.cacheRead / totalIn) * 100) : 0;
+    const kpi = (label, val, sub, cls) => h('div', { class: `tokcard${cls ? ` ${cls}` : ''}` },
+      h('div', { class: 'toklabel', text: label }),
+      h('div', { class: 'tokval', text: val }),
+      h('div', { class: 'toksub', text: sub }));
+
+    const nodes = [
+      bar,
+      h('div', { class: 'tokgrid' },
+        kpi('Total tokens', fmtInt(t.total), `${plural(t.sessions, 'session', 'sessioner')} · ${t.turns} svar`, 'main'),
+        kpi('Input', fmtInt(t.input), t.total > 0 ? `${Math.round((t.input / t.total) * 100)}% af total` : 'Ingen endnu'),
+        kpi('Cache', fmtInt(cTot), `Læst: ${fmtTok(t.cacheRead)}${t.cacheWrite ? ` · Gemt: ${fmtTok(t.cacheWrite)}` : ''} · ${hitPct}% hit`),
+        kpi('Output', fmtInt(t.output), t.total > 0 ? `${Math.round((t.output / t.total) * 100)}% af total` : 'Ingen endnu')),
+    ];
+
+    nodes.push(h('h3', { text: 'Pr. agent' }));
+    if (data.byAgent.length) {
+      nodes.push(tokTable(
+        [['Agent'], ['Sessioner', true], ['Svar', true], ['Input', true], ['Cache', true], ['Output', true], ['Total', true], ['Andel']],
+        data.byAgent.map((a) => h('tr', {},
+          h('td', {}, h('strong', { text: a.name })),
+          h('td', { class: 'num', text: fmtInt(a.sessions) }),
+          h('td', { class: 'num', text: fmtInt(a.turns) }),
+          h('td', { class: 'num', text: fmtInt(a.input) }),
+          h('td', { class: 'num', text: fmtInt(cacheTotal(a)) }),
+          h('td', { class: 'num', text: fmtInt(a.output) }),
+          h('td', { class: 'num' }, h('strong', { text: fmtInt(a.total) })),
+          h('td', {}, barCell(a.total, t.total))))));
+    } else nodes.push(h('p', { class: 'empty', text: 'Ingen agenter registreret i denne periode.' }));
+
+    nodes.push(h('h3', { text: 'Pr. projekt / repo' }));
+    if (data.byRepo.length) {
+      nodes.push(tokTable(
+        [['Projekt / repo'], ['Agenter'], ['Sessioner', true], ['Input', true], ['Cache', true], ['Output', true], ['Total', true], ['Andel']],
+        data.byRepo.map((r) => {
+          const nameCell = r.repo
+            ? (r.inRoot
+              ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(r.repo, 'overview') }, r.repo)
+              : h('span', {}, r.repo, ' ', chip('udenfor rodmappen', 'muted')))
+            : h('span', { class: 'sub', text: 'Ikke knyttet til et repo' });
+          const agentChips = Object.values(r.byAgent || {}).filter((a) => a.total > 0)
+            .map((a) => chip(`${a.name}: ${fmtTok(a.total)}`, 'muted'));
+          return h('tr', {},
+            h('td', {}, nameCell),
+            h('td', {}, h('div', { class: 'tokagents' }, agentChips)),
+            h('td', { class: 'num', text: fmtInt(r.sessions) }),
+            h('td', { class: 'num', text: fmtInt(r.input) }),
+            h('td', { class: 'num', text: fmtInt(cacheTotal(r)) }),
+            h('td', { class: 'num', text: fmtInt(r.output) }),
+            h('td', { class: 'num' }, h('strong', { text: fmtInt(r.total) })),
+            h('td', {}, barCell(r.total, t.total)));
+        })));
+    } else nodes.push(h('p', { class: 'empty', text: 'Ingen tokens brugt i denne periode endnu.' }));
+
+    if (data.byModel.length) {
+      nodes.push(h('h3', { text: 'Pr. model' }), tokTable(
+        [['Model'], ['Agent'], ['Svar', true], ['Input', true], ['Cache', true], ['Output', true], ['Total', true]],
+        data.byModel.map((m) => h('tr', {},
+          h('td', {}, h('code', { text: m.model })),
+          h('td', { text: m.agentName }),
+          h('td', { class: 'num', text: fmtInt(m.turns) }),
+          h('td', { class: 'num', text: fmtInt(m.input) }),
+          h('td', { class: 'num', text: fmtInt(cacheTotal(m)) }),
+          h('td', { class: 'num', text: fmtInt(m.output) }),
+          h('td', { class: 'num' }, h('strong', { text: fmtInt(m.total) }))))));
+    }
+
+    if (data.byDay.length) {
+      const maxDay = Math.max(...data.byDay.map((d) => d.total), 1);
+      nodes.push(h('h3', { text: 'Pr. dag' }), tokTable(
+        [['Dato'], ['Svar', true], ['Input', true], ['Cache', true], ['Output', true], ['Total', true], ['Aktivitet']],
+        data.byDay.map((d) => h('tr', {},
+          h('td', {}, h('code', { text: d.date })),
+          h('td', { class: 'num', text: fmtInt(d.turns) }),
+          h('td', { class: 'num', text: fmtInt(d.input) }),
+          h('td', { class: 'num', text: fmtInt(cacheTotal(d)) }),
+          h('td', { class: 'num', text: fmtInt(d.output) }),
+          h('td', { class: 'num' }, h('strong', { text: fmtInt(d.total) })),
+          h('td', {}, h('div', { class: 'tokbarwrap' }, h('span', { class: 'tokbar', 'aria-hidden': 'true' }, h('i', { style: `width: ${Math.round((d.total / maxDay) * 100)}%` }))))))));
+    }
+
+    if (data.sessions.length) {
+      const liveIds = new Set((state.data && state.data.sessions || []).map((s) => s.id));
+      nodes.push(h('h3', { text: `Seneste sessioner (${data.sessions.length})` }), tokTable(
+        [['Tidspunkt'], ['Agent'], ['Repo'], ['Kilde'], ['Input', true], ['Cache', true], ['Output', true], ['Total', true]],
+        data.sessions.map((s) => {
+          const canOpen = s.source === 'control-tower' && liveIds.has(s.id);
+          const repoCell = canOpen
+            ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(s.repo, `term:${s.id}`) }, s.repo)
+            : (s.repo ? (state.data && state.data.repos.some((r) => r.name === s.repo)
+              ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(s.repo, 'overview') }, s.repo)
+              : s.repo) : '–');
+          return h('tr', {},
+            h('td', { text: ago(s.lastAt || s.startedAt) }),
+            h('td', { text: s.agentName }),
+            h('td', {}, repoCell),
+            h('td', {}, chip(s.source === 'control-tower' ? 'Control Tower' : 'Lokal log', s.source === 'control-tower' ? 'ok' : 'muted')),
+            h('td', { class: 'num', text: fmtInt(s.input) }),
+            h('td', { class: 'num', text: fmtInt(cacheTotal(s)) }),
+            h('td', { class: 'num', text: fmtInt(s.output) }),
+            h('td', { class: 'num' }, h('strong', { text: fmtInt(s.total) })));
+        })));
+    }
+
+    const activeSources = [
+      data.sources.ledgerFile ? 'Control Towers regnskabsfil' : 'sessioner i hukommelsen',
+      data.sources.agyLogs ? 'Antigravity-logs (~/.gemini)' : null,
+      data.sources.claudeLogs ? 'Claude Code-logs (~/.claude/projects)' : null,
+    ].filter(Boolean);
+    nodes.push(h('p', { class: 'hint', text: `Kilder: ${activeSources.join(' · ')}. Kun tal, modelnavn og tidsstempel læses – ingen samtaleindhold vises eller sendes videre.` }));
+    panel.replaceChildren(...nodes);
+  }
+
   // ---------- start ----------
   $('filter').addEventListener('input', (e) => { state.filter = e.target.value; renderChrome(); if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard()); });
   $('notifybtn').addEventListener('click', async () => {
@@ -1268,6 +1490,7 @@
   renderPrefs();
   $('home').addEventListener('click', () => go(null));
   $('skillsnav').addEventListener('click', () => go(null, null, 'skills'));
+  $('tokensnav').addEventListener('click', () => go(null, null, 'tokens'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
   setInterval(() => { if (!document.hidden) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

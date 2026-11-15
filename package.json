@@ -5,6 +5,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
+    "tray": "node server/index.js --tray",
+    "shortcut": "node scripts/setup.js",
     "test": "node --test"
   },
   "license": "UNLICENSED",

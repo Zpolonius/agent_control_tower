@@ -13,11 +13,23 @@ const DEFAULTS = {
   idleSeconds: 8,
   maxSessions: 12,
   personalSkillsDir: '',
+  tokensFile: '',
+  claudeProjectsDir: '',
+  agyBrainDir: '',
 };
 
 // "~" betyder din hjemmemappe – også når det står i indstillingsfilen.
 function expand(p) {
   return path.resolve(p === '~' || /^~[\\/]/.test(p) ? path.join(os.homedir(), p.slice(1)) : p);
+}
+
+function cleanLogDir(val, fallback) {
+  if (val === false) return null;
+  if (typeof val === 'string' && val) {
+    const p = expand(val);
+    if (path.isAbsolute(p)) return p;
+  }
+  return fallback;
 }
 
 function clean(raw) {
@@ -26,6 +38,11 @@ function clean(raw) {
   // Tom værdi = standardstedet for personlige Claude Code-skills.
   cfg.personalSkillsDir = typeof cfg.personalSkillsDir === 'string' && path.isAbsolute(cfg.personalSkillsDir)
     ? cfg.personalSkillsDir : path.join(os.homedir(), '.claude', 'skills');
+  cfg.tokensFile = raw && raw.tokensFile === false
+    ? null
+    : (typeof cfg.tokensFile === 'string' && cfg.tokensFile ? expand(cfg.tokensFile) : '');
+  cfg.claudeProjectsDir = cleanLogDir(raw && raw.claudeProjectsDir, path.join(os.homedir(), '.claude', 'projects'));
+  cfg.agyBrainDir = cleanLogDir(raw && raw.agyBrainDir, path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain'));
   cfg.port = Number.isInteger(cfg.port) && cfg.port > 0 && cfg.port < 65536 ? cfg.port : DEFAULTS.port;
   cfg.idleSeconds = Number.isFinite(cfg.idleSeconds) && cfg.idleSeconds >= 2 ? cfg.idleSeconds : DEFAULTS.idleSeconds;
   cfg.maxSessions = Number.isInteger(cfg.maxSessions) && cfg.maxSessions > 0 ? Math.min(cfg.maxSessions, 50) : DEFAULTS.maxSessions;
