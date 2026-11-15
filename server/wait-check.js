@@ -13,6 +13,8 @@ const SHELLS = new Set([
   'cmd.exe', 'cmd', 'bash.exe', 'bash', 'sh.exe', 'sh', 'zsh', 'fish', 'dash',
 ]);
 const AGENTS = new Set(['claude', 'agy', 'codex', 'gemini', 'opencode', 'aider']);
+const RUNTIME_WRAPPERS = new Set(['node', 'bun', 'deno']);
+const SUBAGENT_FLAG_RE = /\s(?:-p|--print|exec)\b|\bsub-?agent\b/i;
 const IGNORED_HELPERS = new Set([
   'conhost.exe', 'conhost', 'openconsole.exe', 'openconsole',
   'winpty-agent.exe', 'winpty-agent', 'sleep', 'timeout.exe', 'timeout',
@@ -24,12 +26,12 @@ const ACTIVE_SPINNER_RE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✻✽✢]\s*\S/;
 const SPINNER_RE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✻✽✢●]\s*\S/;
 const INTERRUPT_RE = /\b(esc to interrupt|ctrl\+c to interrupt|ctrl\+b to run in background)\b/i;
 const CHROME_RE = /^[─━═╭╮╰╯│┃|+`~\-=_.\s]+$/;
-const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|logout$)/i;
+const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|logout$|(?:[⏵⏸▶►▸]+\s*)?(?:bypass permissions|accept edits|plan mode)\s+on\b)/i;
 const USER_WAIT_RE = /\b((?:waiting|awaiting)\s+(?:for\s+)?(?:user|you|your|input|reply|response|confirmation|approval|permission|decision)|venter på (?:dig|dit svar|svar fra dig|godkendelse|tilladelse|input))\b/i;
-const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|yes,?\s*allow|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|press enter|enter to (?:confirm|approve|allow|run|submit|select|continue)|tryk på enter|select an option|choose an option|esc to (?:cancel|reject|deny|decline)|(?:run|execute) command\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
-const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
-const BARE_PROMPT_RE = /^[>❯$#]\s*$/;
+const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
+const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
+const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
+const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 
 // Prioriteret rækkefølge: det mest specifikke vises først.
@@ -129,7 +131,7 @@ function queryProcesses() {
 function isAgentProcess(proc) {
   const base = baseAgentName(proc.name);
   if (AGENTS.has(base)) return true;
-  if ((base === 'node' || base === 'bun' || base === 'deno') && proc.cmd) {
+  if (RUNTIME_WRAPPERS.has(base) && proc.cmd) {
     return /(?:^|[\\/\s"'])(?:@anthropic-ai[\\/])?(claude(?:-code)?|agy|antigravity|codex|gemini(?:-cli)?|opencode|aider)(?:[\\/\s"'.]|$)/i.test(proc.cmd);
   }
   return false;
@@ -158,7 +160,7 @@ function collectDescendants(rootPid, processes) {
   return { list: out, byParent };
 }
 
-// Finder hvilke pid'er der udgør selve hovedagenten (inkl. evt. .cmd/.sh-wrapper), så kun det den *starter* tæller.
+// Finder hvilke pid'er der udgør selve hovedagenten (inkl. evt. .cmd/.sh/node-wrapper), så kun det den *starter* tæller.
 function findPrimaryAgentPids(rootPid, byParent) {
   const chain = new Set([rootPid]);
   let cur = rootPid;
@@ -166,7 +168,19 @@ function findPrimaryAgentPids(rootPid, byParent) {
     const kids = (byParent.get(cur) || []).filter((k) => !IGNORED_HELPERS.has(normName(k.name)));
     if (!kids.length) break;
     const agentKid = kids.find(isAgentProcess);
-    if (agentKid) { chain.add(agentKid.pid); break; }
+    if (agentKid) {
+      chain.add(agentKid.pid);
+      // JS-wrappere (fx node .../codex.js -> codex.exe) starter den egentlige agent-binær som ét direkte barn.
+      if (RUNTIME_WRAPPERS.has(baseAgentName(agentKid.name))) {
+        const nextKids = (byParent.get(agentKid.pid) || []).filter(
+          (k) => !IGNORED_HELPERS.has(normName(k.name)) && !(k.cmd && PERSISTENT_CMD_RE.test(k.cmd)),
+        );
+        if (nextKids.length === 1 && AGENTS.has(baseAgentName(nextKids[0].name)) && !SUBAGENT_FLAG_RE.test(nextKids[0].cmd || '')) {
+          chain.add(nextKids[0].pid);
+        }
+      }
+      break;
+    }
     // En enkelt wrapper-skal (fx cmd.exe /c claude.cmd eller sh -c ...) følges ét led ned.
     const shellKids = kids.filter((k) => SHELLS.has(normName(k.name)));
     if (kids.length === 1 && shellKids.length === 1) {
@@ -231,7 +245,7 @@ function cleanLines(buffer) {
   return text
     .split(/[\r\n]+/)
     .map((l) => l.replace(/^[│┃]+\s*|\s*[│┃]+$/g, '').trim())
-    .filter((l) => l && !CHROME_RE.test(l) && !FOOTER_RE.test(l));
+    .filter((l) => l && !CHROME_RE.test(l) && (!FOOTER_RE.test(l) || INTERRUPT_RE.test(l)));
 }
 
 function isUserWaitLine(line) {
@@ -244,7 +258,8 @@ function inspectBuffer(buffer) {
 
   const recentBottom = lines.slice(-6);
   const hasInterrupt = lines.slice(-10).some((l) => INTERRUPT_RE.test(l));
-  const hasSpinner = recentBottom.some((l) => SPINNER_RE.test(l));
+  const hasActiveSpinner = recentBottom.some((l) => ACTIVE_SPINNER_RE.test(l));
+  const hasSpinner = hasActiveSpinner || recentBottom.some((l) => SPINNER_RE.test(l));
 
   // Eksplicitte godkendelses-/bruger-prompts i bunden vinder altid.
   if (recentBottom.some(isUserWaitLine)) {
@@ -252,7 +267,8 @@ function inspectBuffer(buffer) {
   }
 
   // Uden aktiv spinner eller interrupt-linje betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
-  if (!hasInterrupt && !hasSpinner) {
+  // Statiske `●`-prikker i afsluttede svar må ikke blokere et tomt prompt nederst.
+  if (!hasInterrupt && !hasActiveSpinner) {
     const lastTwo = lines.slice(-2);
     const looksLikeQuestion = (l) => /\?\s*$/.test(l) && !/https?:\/\/\S*\?/.test(l);
     if (lastTwo.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;

@@ -22,6 +22,19 @@ test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep',
     { pid: 106, ppid: 100, name: 'sleep', cmd: 'sleep 0.2' },
   ];
   assert.equal(inspectProcessTree(100, procs), null);
+
+  // OpenAI Codex CLI via npm node-wrapper -> native codex.exe må ikke ligne en subagent
+  const codexWrapped = [
+    { pid: 100, ppid: 1, name: 'powershell.exe', cmd: 'powershell.exe -NoLogo -Command "codex; exit $LASTEXITCODE"' },
+    { pid: 101, ppid: 100, name: 'cmd.exe', cmd: 'cmd.exe /d /s /c codex.cmd' },
+    { pid: 102, ppid: 101, name: 'node.exe', cmd: 'node.exe "C:\\Users\\u\\npm\\node_modules\\@openai\\codex\\bin\\codex.js"' },
+    { pid: 103, ppid: 102, name: 'codex.exe', cmd: 'codex.exe' },
+  ];
+  assert.equal(inspectProcessTree(100, codexWrapped), null);
+  assert.equal(inspectProcessTree(100, [
+    ...codexWrapped,
+    { pid: 200, ppid: 103, name: 'codex.exe', cmd: 'codex.exe exec "audit tests"' },
+  ]).waitingFor, 'subagenter');
 });
 
 test('inspectProcessTree: genkender subagenter, e2e-tests, tests, emulator, build og generiske kommandoer', () => {
@@ -145,6 +158,39 @@ test('inspectBuffer: skelner mellem aktiv venten og bruger-prompts', () => {
 
   // Enkeltstående "Proceed?" med aktiv interrupt-linje -> venter på brugeren!
   assert.equal(inspectBuffer('Proceed?\r\nesc to interrupt'), null);
+
+  // OpenAI Codex CLI: struktureret spørgsmål (request_user_input), Approve and run og placeholder-prompt
+  const codexQuestion = [
+    'Question 1/2',
+    'Which test runner should we use?',
+    '› 1. Vitest (Recommended)',
+    '  2. Jest',
+    '  3. Type your own answer',
+    'esc to dismiss',
+    'Working (12s • esc to interrupt)',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(codexQuestion), null);
+  assert.equal(inspectBuffer('Approve and run\r\n  npm test\r\nesc to interrupt'), null);
+  assert.equal(inspectBuffer('● Finished updating tests.\r\n› Ask Codex to do anything'), null);
+
+  // Claude Code: afsluttet svar med ●-prik + tomt prompt + shift+tab-statuslinje -> venter på brugeren!
+  const claudeFinished = [
+    '● I fixed the docker build pipeline and verified everything.',
+    '──────────────────────────',
+    '❯ ',
+    '──────────────────────────',
+    '⏵⏵ accept edits on (shift+tab to cycle) · 42% context left',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(claudeFinished), null);
+
+  // Aider: (Y)es/(N)o-prompts med [Yes]: -> venter på brugeren!
+  assert.equal(inspectBuffer('pytest\r\nRun shell command? (Y)es/(N)o/(D)on\'t ask again [Yes]:'), null);
+  assert.equal(inspectBuffer('Add server/app.js to the chat? (Y)es/(N)o [Yes]:'), null);
+
+  // Gemini CLI / OpenCode: MCP-godkendelse, mappe-tillid og placeholder-input
+  assert.equal(inspectBuffer('Allow MCP tool github/list_issues?\r\nesc to interrupt'), null);
+  assert.equal(inspectBuffer('Do you trust this folder?\r\n● Yes\r\nesc to interrupt'), null);
+  assert.equal(inspectBuffer('● Ready.\r\n> Type your message or @path/to/file'), null);
 
   // Et gammelt godkendelses-prompt højere oppe må ikke skjule en ny aktiv spinner nedenunder
   const spinnerAfterOldPrompt = [
