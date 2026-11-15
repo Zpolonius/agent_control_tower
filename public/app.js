@@ -19,7 +19,7 @@
 
   const state = {
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false,
-    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
   };
 
   const STATUS = {
@@ -36,13 +36,14 @@
     REVIEW_REQUIRED: ['Afventer review', 'wait'], COMMENTED: ['Kommenteret', 'open'], DISMISSED: ['Afvist', 'done'],
   };
 
-  function badge(status, waitingFor, waitingDetail) {
+  function badge(status, waitingFor, waitingDetail, needsApproval) {
     const s = STATUS[status] || STATUS.afsluttet;
-    const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}` : s.label;
+    const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}`
+      : status === 'venter' && needsApproval ? 'Mangler godkendelse' : s.label;
     return h('span', { class: `badge ${s.cls}`, title: status === 'afventer' && waitingDetail ? waitingDetail : null },
       h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), label);
   }
-  const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail);
+  const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail, s.needsApproval);
   const SVG = 'http://www.w3.org/2000/svg';
   function sv(tag, attrs, ...kids) {
     const n = document.createElementNS(SVG, tag);
@@ -91,6 +92,7 @@
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
+    if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
     return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
@@ -265,6 +267,11 @@
   // ---------- beskeder, lyd og fanens titel ----------
   // Lidt humor, men tallet står altid først, så man kan aflæse fanen på et øjeblik.
   const FUN = {
+    godkendelse: [
+      '{a} mangler din godkendelse i {r}.',
+      '{a} vil gerne have lov til at fortsætte i {r}.',
+      '{a} venter på et ja eller nej fra dig i {r}.',
+    ],
     venter: [
       '{a} har rakt hånden op i {r}.',
       '{a} står og tripper i {r}.',
@@ -360,14 +367,18 @@
   }
 
   function notify(s, kind) {
-    const text = fill(pickRandom(FUN[kind]), s);
+    const msgKey = kind === 'venter' && s.needsApproval ? 'godkendelse' : kind;
+    const text = fill(pickRandom(FUN[msgKey]), s);
     ding(kind);
     // Ser du allerede på netop den agent, er en besked bare støj.
     const watching = !document.hidden && state.repo === s.repo && state.view === `term:${s.id}`;
     if (watching) return;
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
-        const n = new Notification(kind === 'fejlet' ? 'En agent er gået ned' : kind === 'venter' ? 'En agent venter på dig' : 'En agent er færdig', { body: text, tag: `ct-${s.id}` });
+        const title = kind === 'fejlet' ? 'En agent er gået ned'
+          : kind === 'venter' ? (s.needsApproval ? 'En agent mangler godkendelse' : 'En agent venter på dig')
+          : 'En agent er færdig';
+        const n = new Notification(title, { body: text, tag: `ct-${s.id}` });
         n.onclick = () => { window.focus(); go(s.repo, `term:${s.id}`); n.close(); };
       } catch { /* nogle browsere tillader kun beskeder via en baggrundstjeneste */ }
     }
@@ -378,19 +389,24 @@
   function detectChanges() {
     if (!state.data) return;
     const prev = state.prevStatus;
+    const prevApproval = state.prevApproval || {};
     const next = {};
+    const nextApproval = {};
     for (const s of state.data.sessions) {
       if (s.kind !== 'agent') continue;
       next[s.id] = s.status;
+      nextApproval[s.id] = !!s.needsApproval;
       // prev === null: siden er lige åbnet. En agent vi aldrig har set før, er startet siden sidst – går den ned
       // med det samme, skal det også give en besked.
-      if (!prev || prev[s.id] === s.status) continue;
-      if (s.status === 'venter' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'venter');
+      const becameApproval = s.status === 'venter' && !!s.needsApproval && !prevApproval[s.id];
+      if (!prev || (prev[s.id] === s.status && !becameApproval)) continue;
+      if (s.status === 'venter') notify(s, 'venter');
       else if (s.status === 'faerdig' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'faerdig');
       else if (s.status === 'fejlet') notify(s, 'fejlet');
       else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id) && prev[s.id] !== 'faerdig') notify(s, 'afsluttet');
     }
     state.prevStatus = next;
+    state.prevApproval = nextApproval;
   }
 
   // ---------- data ----------
@@ -419,7 +435,7 @@
     }
     // Tegn kun om, når noget faktisk har ændret sig – ellers ville tastaturfokus forsvinde hvert 3. sekund.
     const sig = JSON.stringify([state.offline, state.locked, state.data && state.data.repos, state.data && state.data.skipped,
-      state.data && state.data.sessions.map((x) => [x.id, x.status, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
+      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
     loadSummaries();
     if (sig === state.sig) { updateLiveText(); return; }
     state.sig = sig;
@@ -1269,7 +1285,8 @@
   $('home').addEventListener('click', () => go(null));
   $('skillsnav').addEventListener('click', () => go(null, null, 'skills'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
-  setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+  const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
+  setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   refresh().then(renderMain);
 })();

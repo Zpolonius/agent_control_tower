@@ -8,7 +8,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
-const { createWaitChecker, inspectProcessTree, inspectBuffer, isTaskDone, sanitizeDetail } = require('../server/wait-check');
+const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, isTaskDone, sanitizeDetail } = require('../server/wait-check');
 const { createSessions } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
@@ -214,6 +214,183 @@ test('createWaitChecker: cacher også tomme/fejlende opslag kortvarigt', async (
   await checker.checkAll([s]);
   assert.equal(calls, 1);
   assert.equal(s.waitState.waitingFor, 'emulator');
+});
+
+test('hasApprovalPrompt & createWaitChecker: godkendelse vinder over kørende baggrundsprocesser og status-gentegninger', async () => {
+  // Claude Code godkendelse mens subagenter / baggrundstasks kører og statuslinjen tikker
+  const approvalWithBgTicks = [
+    '● 2 Agent tools running…',
+    '  ├─ Agent(Audit auth) · Running…',
+    '  └─ Agent(Check DB) · Running…',
+    'Bash command',
+    '  git push origin main',
+    'Do you want to proceed?',
+    '❯ 1. Yes',
+    '  2. Yes, and don\'t ask again for git push commands',
+    '  3. No',
+    '  4. Type here to tell Claude what to do differently',
+    ...Array.from({ length: 18 }, (_, i) => `\x1b[28;1H  2 background tasks · ${10 + i}s · esc to interrupt\r\n  ? for shortcuts · esc to interrupt`),
+  ].join('\r\n');
+  assert.equal(hasApprovalPrompt(approvalWithBgTicks), true);
+  assert.equal(inspectBuffer(approvalWithBgTicks), null);
+
+  // Gemini / Codex godkendelse med baggrundsstatus
+  const geminiWithBg = [
+    '● Run command',
+    'Run this command?',
+    '  npm run migrate',
+    '❯ Yes, allow once',
+    '  Always allow',
+    '  No (esc)',
+    '2 background tasks running · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(hasApprovalPrompt(geminiWithBg), true);
+  assert.equal(inspectBuffer(geminiWithBg), null);
+
+  const codexWithBg = [
+    'Approve and run',
+    '  npm test',
+    '› 1. Yes, proceed',
+    '  2. No',
+    'esc to dismiss',
+    'Working (12s • esc to interrupt)',
+  ].join('\r\n');
+  assert.equal(hasApprovalPrompt(codexWithBg), true);
+  assert.equal(inspectBuffer(codexWithBg), null);
+
+  // Gammel godkendelse efterfulgt af en aktiv ikke-baggrunds spinner -> tilbage til tests!
+  const spinnerAfterOldPrompt = [
+    'Run this command?',
+    '  npm test',
+    '  line 2',
+    '  line 3',
+    '  line 4',
+    '  line 5',
+    '  line 6',
+    '  line 7',
+    '⠋ Running npm test…',
+    'esc to interrupt',
+  ].join('\r\n');
+  assert.equal(hasApprovalPrompt(spinnerAfterOldPrompt), false);
+  assert.equal(inspectBuffer(spinnerAfterOldPrompt).waitingFor, 'tests');
+
+  // createWaitChecker: selv med kørende baggrundsproces i procestræet må godkendelse give waitState = null
+  const procs = [
+    { pid: 100, ppid: 1, name: 'powershell.exe', cmd: 'powershell.exe -NoLogo -Command "claude"' },
+    { pid: 102, ppid: 100, name: 'claude.exe', cmd: 'claude.exe' },
+    { pid: 200, ppid: 102, name: 'node.exe', cmd: 'node.exe server.js' },
+    { pid: 201, ppid: 200, name: 'vite', cmd: 'vite --port 5173' },
+  ];
+  const checker = createWaitChecker({ query: async () => procs });
+  const s = { proc: { pid: 100 }, buffer: approvalWithBgTicks, waitState: { waitingFor: 'server', source: 'process' } };
+  await checker.checkAll([s]);
+  assert.equal(s.waitState, null);
+  assert.equal(checker.checkSync(s), null);
+
+  // Når godkendelsen er besvaret og væk, slår baggrundsprocessen igennem igen
+  s.buffer = '✻ Working…\r\nesc to interrupt';
+  await checker.checkAll([s]);
+  assert.equal(s.waitState.waitingFor, 'server');
+});
+
+test('sessions integration: agent der mangler godkendelse går til venter trods løbende baggrundsoutput', async () => {
+  const ss = createSessions({ idleSeconds: 5, maxSessions: 4 });
+  const bgApproval = ss.create({
+    repo: 'test',
+    cwd: os.tmpdir(),
+    kind: 'agent',
+    // Skriver godkendelses-prompt og fortsætter med at gentegne baggrundsstatus hvert 250ms (under idleSeconds = 5s)
+    agent: {
+      id: 'bg-app',
+      name: 'BgApp',
+      command: 'node -e "console.log(\'Do you want to proceed?\\n❯ 1. Yes\\n  2. No\'); let i=0; setInterval(()=>process.stdout.write(\'\\x1b[20;1H2 background tasks · \'+(++i)+\'s · esc to interrupt\\n\'), 250)"',
+    },
+  });
+
+  try {
+    let view = null;
+    const end = Date.now() + 4500;
+    while (Date.now() < end) {
+      await ss.refreshWaits();
+      view = ss.list().find((x) => x.id === bgApproval.id);
+      if (view && view.status === 'venter' && view.needsApproval) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    assert.equal(view.status, 'venter');
+    assert.equal(view.needsApproval, true);
+    assert.equal(view.waitingFor, null);
+
+    // Når brugeren godkender med Enter, ryddes godkendelses-status med det samme
+    const client = ss.attach(bgApproval.id, { onData() {}, onExit() {} });
+    client.write('\r');
+    const afterReply = ss.list().find((x) => x.id === bgApproval.id);
+    assert.equal(afterReply.needsApproval, false);
+    assert.equal(afterReply.status, 'arbejder');
+    client.detach();
+  } finally {
+    ss.forceAll();
+    await new Promise((r) => setTimeout(r, 200));
+  }
+});
+
+test('API /api/state: returnerer venter + needsApproval når agent har baggrundsproces og kræver godkendelse', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-wait-approval-api-'));
+  const repo = path.join(dir, 'demo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  const token = 'c'.repeat(64);
+  const config = cfg.clean({
+    root: dir,
+    port: 4318,
+    idleSeconds: 2,
+    maxSessions: 2,
+    agents: [{
+      id: 'bg-approve',
+      name: 'BgApprove',
+      command: 'node -e "const { spawn } = require(\'node:child_process\'); spawn(process.execPath, [\'-e\', \'setInterval(()=>{}, 1000)\']); console.log(\'Run this command?\\n  npm test\\n❯ Yes\\n  No\\nesc to interrupt\'); setInterval(()=>{}, 1000)"',
+    }],
+  });
+  const app = createApp({ config, token });
+  const dispatch = (method, url, body) => new Promise((resolve) => {
+    const req = new EventEmitter();
+    req.method = method;
+    req.url = url;
+    req.headers = {
+      host: '127.0.0.1:4318',
+      authorization: `Bearer ${token}`,
+      origin: 'http://127.0.0.1:4318',
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    };
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      writeHead(code) { this.statusCode = code; this.headersSent = true; },
+      end(chunk) { resolve({ status: this.statusCode, json: JSON.parse(String(chunk || '{}')) }); },
+    };
+    app.server.emit('request', req, res);
+    if (body) req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+
+  try {
+    const created = await dispatch('POST', '/api/sessions', { repo: 'demo', kind: 'agent', agentId: 'bg-approve' });
+    assert.equal(created.status, 201);
+    const id = created.json.id;
+    let found = null;
+    const end = Date.now() + 6000;
+    while (Date.now() < end) {
+      const st = await dispatch('GET', '/api/state');
+      found = st.json.sessions.find((s) => s.id === id);
+      if (found && found.status === 'venter' && found.needsApproval) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    assert.equal(found.status, 'venter');
+    assert.equal(found.needsApproval, true);
+    assert.equal(found.waitingFor, null);
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('sessions integration: skifter til afventer ved aktiv venten og venter ved spørgsmål', async () => {
