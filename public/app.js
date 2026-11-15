@@ -597,8 +597,10 @@
         h('p', { class: 'nexttitle', text: working.length === 1 ? 'En agent arbejder' : `${working.length} agenter arbejder` }),
         h('p', { class: 'nextsub', text: 'Du behøver ikke gøre noget lige nu. Fanens titel viser, når en agent venter på dig.' })));
     }
-    return h('div', { class: 'next idle' }, h('div', {},
+    // Også når ingen arbejder, er der en agent at se på: den sover ved sit skrivebord, indtil du starter en.
+    return h('div', { class: 'next idle' }, robot('afsluttet'), h('div', { class: 'nextbody' },
       h('p', { class: 'nexttitle', text: 'Ingen agenter på arbejde' }),
+      h('p', { class: 'nextsub', text: 'Agenten her sover, indtil du sætter den i gang.' }),
       h('ol', { class: 'steps' },
         h('li', { text: 'Vælg et repo herunder' }),
         h('li', { text: first ? `Tryk »Start ${first.name}«` : 'Tilføj en agent i indstillingsfilen' }),
