@@ -192,7 +192,6 @@ npm test
 
 - Sessioner lever så længe Control Tower kører. Stopper du programmet (Ctrl+C), lukkes alle terminaler og agenter – også dem der ikke selv vil stoppe.
 - "Venter på dig" betyder kun, at agenten har været stille. En agent der arbejder uden at skrive noget, ser også sådan ud.
-- Den valgte fane og det åbne issue huskes ikke i adressen, så en genindlæsning går tilbage til overblikket.
 - Markdown-visningen er enkel: understregning som kursiv, links med parenteser og indlejrede nummererede lister vises ikke korrekt.
 - Tastatur: F6 flytter fokus ud af terminalen.
 - Kun git-repos direkte i rodmappen vises (ikke undermapper).

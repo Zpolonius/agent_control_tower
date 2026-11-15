@@ -2,6 +2,8 @@
 // Resumé af hvad der er sket i et repo, siden en agent startede. Bygger kun på git – der kaldes ingen model,
 // og der skrives ikke noget i repoet. Resuméet viser ændringer i repoet i perioden, uanset hvem der lavede dem.
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function git(cwd, args, input) {
   return new Promise((resolve) => {
@@ -110,4 +112,63 @@ async function summarize(cwd, base) {
   };
 }
 
-module.exports = { baseline, summarize, parseStatus, parseNumstat };
+async function diff(cwd, base, { file, commit } = {}) {
+  let out = null;
+  if (commit != null && commit !== '') {
+    if (typeof commit !== 'string' || !SHA.test(commit.trim())) {
+      return { available: false, reason: 'Kunne ikke læse commit-diff.' };
+    }
+    out = await git(cwd, ['show', '--format=commit %h%n%s%n', '--patch', '--stat=100', commit.trim()]);
+    if (out == null) return { available: false, reason: 'Kunne ikke læse commit-diff.' };
+  } else if (file != null && file !== '') {
+    if (typeof file !== 'string' || file.length === 0 || file.length > 400 || file.startsWith('-') || file.includes('\0')) {
+      return { available: false, reason: 'Ugyldigt filnavn.' };
+    }
+    const targetFile = file.includes(' → ') ? file.split(' → ').pop() : file;
+    if (!targetFile || targetFile.startsWith('-')) {
+      return { available: false, reason: 'Ugyldigt filnavn.' };
+    }
+    const rootResolved = path.resolve(cwd);
+    const absTarget = path.resolve(cwd, targetFile);
+    if (!absTarget.startsWith(rootResolved + path.sep)) {
+      return { available: false, reason: 'Ugyldig filsti.' };
+    }
+    let from = base && base.sha && SHA.test(base.sha) ? base.sha : null;
+    if (!from) {
+      const empty = await git(cwd, ['hash-object', '-t', 'tree', '--stdin'], '');
+      from = empty && SHA.test(empty.trim()) ? empty.trim() : null;
+    }
+    if (!from) return { available: false, reason: 'Kunne ikke bestemme udgangspunkt for diff.' };
+    out = await git(cwd, ['diff', from, '--', targetFile]);
+    if (!out || !out.trim()) {
+      try {
+        const realRoot = fs.realpathSync(rootResolved);
+        const realTarget = fs.realpathSync(absTarget);
+        const st = fs.statSync(realTarget);
+        if (st.isFile() && realTarget.startsWith(realRoot + path.sep)) {
+          const rawBuf = fs.readFileSync(realTarget);
+          const slice = rawBuf.subarray(0, 65536);
+          if (slice.includes(0)) {
+            out = `--- /dev/null\n+++ b/${targetFile}\nBinær fil (${st.size} bytes)\n`;
+          } else {
+            const text = slice.toString('utf8').replace(/\r\n/g, '\n').replace(/\n$/, '');
+            const lines = text ? text.split('\n') : [];
+            const body = lines.map((l) => `+${l}`).join('\n') + (lines.length ? '\n' : '');
+            out = `--- /dev/null\n+++ b/${targetFile}\n@@ -0,0 +1,${lines.length} @@\n${body}`;
+          }
+        }
+      } catch {
+        /* Filen findes ikke eller kan ikke læses direkte */
+      }
+    }
+    if (out == null) return { available: false, reason: 'Kunne ikke læse fil-diff.' };
+  } else {
+    return { available: false, reason: 'Mangler fil eller commit.' };
+  }
+
+  const MAX = 80000;
+  const truncated = out.length > MAX;
+  return { available: true, diff: out.slice(0, MAX), truncated };
+}
+
+module.exports = { baseline, summarize, diff, parseStatus, parseNumstat };

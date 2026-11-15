@@ -48,8 +48,12 @@ h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; font-fam
 
 .layout { flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 0; }
 .sidebar { border-right: 1px solid var(--line); background: var(--panel); padding: 12px; overflow: auto; }
+.filterbar { display: flex; gap: 6px; align-items: stretch; }
+.filter { flex: 1; min-width: 0; }
 .filter input { width: 100%; background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 8px 10px; }
 .filter input::placeholder { color: var(--muted); }
+.sortbtn { background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 0 9px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.sortbtn:hover { border-color: var(--text); color: var(--text); background: var(--panel2); }
 .navhome, .repo { width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 8px 10px; cursor: pointer; display: block; }
 .navhome { margin: 10px 0 0; font-weight: 600; }
 .navhome + .navhome { margin: 2px 0 0; }
@@ -178,7 +182,7 @@ h3.plain { font: 600 17px var(--sans); text-transform: none; letter-spacing: 0; 
 h2:focus { outline: none; }
 /* Fingre har brug for større trykflader end en mus. */
 @media (pointer: coarse) {
-  .btn, .btn.small, .tab, .navhome, .repo { min-height: 44px; }
+  .btn, .btn.small, .sortbtn, .tab, .navhome, .repo { min-height: 44px; }
   .skillform .radio { min-height: 44px; }
   .panelbar { gap: 14px; }
 }
@@ -187,13 +191,27 @@ h2:focus { outline: none; }
 .desksum { margin-top: 6px; font-size: 12.5px; color: var(--muted); } .desksum:empty { display: none; }
 .sumbox { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 10px; }
 .sumbox > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
-.sumbox > div { padding: 0 14px 12px; max-height: min(260px, 24vh); overflow: auto; }
+.sumbox > div { padding: 0 14px 12px; max-height: min(360px, 34vh); overflow: auto; }
 .sumhead { font-size: 15px; }
 .sumbox .sumh { margin: 12px 0 4px; font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .sumlist { display: grid; gap: 3px; }
 .sumlist li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; overflow-wrap: anywhere; }
 .sumlist code, .sumpath { font: 12.5px var(--mono); }
 .sumnum { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.sumtoggle { background: none; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; margin: -3px -6px; cursor: pointer; display: inline-flex; gap: 10px; align-items: baseline; flex-wrap: wrap; text-align: left; color: inherit; }
+.sumtoggle:hover { background: var(--panel2); border-color: var(--line2); }
+.sumtoggle::before { content: "▸"; font: 11px var(--mono); color: var(--muted); transition: transform .12s; display: inline-block; }
+.sumtoggle[aria-expanded="true"]::before { transform: rotate(90deg); color: var(--bring); }
+.sumtoggle code { color: var(--blue); }
+.diffslot { flex-basis: 100%; width: 100%; margin: 4px 0 8px; }
+.diffslot[hidden] { display: none; }
+.diffbox { background: #0b0d0f; border: 1px solid var(--line2); border-radius: 6px; overflow: hidden; }
+.diffpre { margin: 0; padding: 8px 10px; font: 12px/1.45 var(--mono); overflow: auto; max-height: 280px; }
+.diffline { display: block; white-space: pre; padding: 0 4px; border-radius: 2px; }
+.diffline.add { background: rgba(110, 201, 67, 0.14); color: #b8f09c; }
+.diffline.del { background: rgba(227, 45, 34, 0.16); color: #ffb3ad; }
+.diffline.hunk { color: var(--blue); background: rgba(125, 184, 255, 0.08); }
+.diffline.meta { color: var(--muted); }
 
 /* ---- issues ---- */
 .sendbox { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--bring); border-radius: var(--r); }
@@ -246,7 +264,8 @@ h2:focus { outline: none; }
 .deskcard.work { --tone: var(--bring); } .deskcard.extwait { --tone: var(--blue); } .deskcard.wait { --tone: var(--amber); box-shadow: 0 0 0 1px #7a5f24; }
 .deskcard.quota { --tone: var(--quota); box-shadow: 0 0 0 1px #7a4624; }
 .deskcard.ready { --tone: #5ee2a0; box-shadow: 0 0 0 1px #2f7d57; } .deskcard.fail { --tone: var(--posten-text); } .deskcard.done { --tone: #7d8891; }
-.deskcard .btn { grid-column: 1 / -1; margin-top: 8px; align-self: end; }
+.deskcard > .btn { grid-column: 1 / -1; margin-top: 8px; align-self: end; }
+.quickactions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .deskname { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 15px; }
 .deskrepo { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .deskstatus { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }

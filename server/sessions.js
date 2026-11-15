@@ -4,7 +4,10 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
-const { createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone } = require('./wait-check');
+const {
+  createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone,
+  CHROME_RE, FOOTER_RE, INTERRUPT_RE, BARE_PROMPT_RE, TURN_DONE_RE,
+} = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -28,6 +31,8 @@ function shellCommand(agentCommand) {
   return agentCommand ? [exe, ['-l', '-i', '-c', agentCommand]] : [exe, ['-l']];
 }
 
+const isNoiseLine = (l) => !l || CHROME_RE.test(l) || FOOTER_RE.test(l) || INTERRUPT_RE.test(l) || BARE_PROMPT_RE.test(l) || TURN_DONE_RE.test(l);
+
 // Finder den seneste læsbare linje fra agenten, uden farvekoder og styretegn, til taleboblen i overblikket.
 // Det er et skøn: programmer der tegner hele skærmen om (som Claude Code) kan give en bundlinje i stedet for en besked.
 function lastLine(buffer, errorsFirst) {
@@ -36,11 +41,17 @@ function lastLine(buffer, errorsFirst) {
   if (buffer.length > 6000) tail = tail.slice(Math.max(0, tail.search(/[\r\n]/)));
   const text = tail
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[mhl]/g, '')
+    .replace(/\x1b\[\d*C/g, ' ')
     .replace(/\x1b\[[0-9;?<=>]*[ -/]*[@-~]/g, '\n')
     .replace(/\x1b[@-_]/g, '')
     .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
-  const lines = text.split(/[\r\n]+/).map((l) => l.replace(/^[\s>❯$#│|]+/, '').trim())
-    .filter((l) => l !== 'logout' && (l.match(/\p{L}/gu) || []).length >= 3); // 'logout' er skallens egen afskedshilsen
+  const lines = text
+    .split(/[\r\n]+/)
+    .map((l) => l.replace(/^[│┃|]+\s*|\s*[│┃|]+$/g, '').trim())
+    .filter((l) => !isNoiseLine(l))
+    .map((l) => l.replace(/^[\s●⏺•>❯›$#│┃|]+/, '').replace(/\s*[│┃|]+$/, '').trim())
+    .filter((l) => !isNoiseLine(l) && l !== 'logout' && (l.match(/\p{L}/gu) || []).length >= 3); // 'logout' er skallens egen afskedshilsen
   const short = (l) => (l.length > 140 ? `${l.slice(0, 139)}…` : l);
   // Stoppede agenten med en fejl, er selve fejlbeskeden mere nyttig end den allersidste linje.
   if (errorsFirst) {
@@ -144,7 +155,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   }
 
   // role/brief: startes agenten i en rolle, indsættes rollens arbejdsbeskrivelse, så snart agenten er klar.
-  function create({ repo, cwd, kind, agent, baseline, role, brief }) {
+  function create({ repo, cwd, kind, agent, baseline, role, brief, initialPaste }) {
     const running = [...sessions.values()].filter((s) => s.exitCode == null).length;
     if (running >= config.maxSessions) {
       const err = new Error(`Der kører allerede ${running} sessioner (maks. ${config.maxSessions}). Stop eller fjern en session først.`);
@@ -157,6 +168,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
     const now = Date.now();
+    const queuedPaste = kind === 'agent' && typeof initialPaste === 'string' && initialPaste.trim().length > 0 ? initialPaste : null;
     const s = {
       id: crypto.randomBytes(12).toString('hex'), repo, kind, cwd, baseline: baseline || null,
       agentId: kind === 'agent' ? agent.id : null,
@@ -165,8 +177,10 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       pendingBrief: kind === 'agent' && brief ? brief : null, briefTimer: null,
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
+      queuedPaste, initialPasteTimer: null,
       approvalSince: null, quotaSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
     };
+    sessions.set(s.id, s);
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
       // Ingen af delene tæller som at agenten arbejder.
@@ -188,6 +202,24 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         const nl = cut.indexOf('\n');
         s.buffer = nl !== -1 && nl < 8192 ? cut.slice(nl + 1) : cut;
       }
+      if (s.queuedPaste) {
+        clearTimeout(s.initialPasteTimer);
+        if (s.bracketed) {
+          const q = s.queuedPaste;
+          s.queuedPaste = null;
+          s.initialPasteTimer = null;
+          paste(s.id, q);
+        } else {
+          s.initialPasteTimer = setTimeout(() => {
+            s.initialPasteTimer = null;
+            if (!s.queuedPaste) return;
+            const q = s.queuedPaste;
+            s.queuedPaste = null;
+            paste(s.id, q);
+          }, 900);
+          s.initialPasteTimer.unref();
+        }
+      }
       if (s.kind === 'agent' && !s.approvalTimer) {
         s.approvalTimer = setTimeout(() => {
           s.approvalTimer = null;
@@ -199,16 +231,15 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       for (const c of s.clients) c.onData(data);
     });
     proc.onExit(({ exitCode, signal }) => {
-      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.briefTimer); clearTimeout(s.briefFallback);
+      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.briefTimer); clearTimeout(s.briefFallback); clearTimeout(s.initialPasteTimer);
       s.pendingBrief = null;
-      s.approvalTimer = null;
+      s.approvalTimer = null; s.initialPasteTimer = null; s.queuedPaste = null;
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
       s.endedAt = Date.now();
       if (s.kind === 'agent' && onSessionEvent) onSessionEvent('exit', view(s));
       for (const c of s.clients) c.onExit(s.exitCode);
     });
-    sessions.set(s.id, s);
     // Siger agenten slet ingenting efter start, indsættes beskrivelsen alligevel efter et stykke tid.
     if (s.pendingBrief) {
       s.briefFallback = setTimeout(() => deliverBrief(s), BRIEF_MAX_WAIT_MS);
@@ -283,6 +314,23 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return 'ok';
   }
 
+  // Sender et hurtig-svar (fx ja/nej/enter/1/2/esc) direkte til en kørende agent fra overblikket.
+  const KEYS = { enter: '\r', yes: 'y\r', no: 'n\r', '1': '1\r', '2': '2\r', esc: '\x1b' };
+  function approve(id, key) {
+    const s = get(id);
+    if (!s || s.exitCode != null) return 'gone';
+    if (s.kind !== 'agent') return 'not-agent';
+    if (!Object.prototype.hasOwnProperty.call(KEYS, key)) return 'invalid';
+    s.lastInputAt = Date.now();
+    s.hadUserInput = true;
+    s.pendingPaste = false;
+    s.approvalSince = null;
+    s.quotaSince = null;
+    s.approvalCooldownUntil = Date.now() + 600;
+    s.proc.write(KEYS[key]);
+    return 'ok';
+  }
+
   // Sender et signal til hele processens gruppe (agenten og det den selv har startet).
   function signal(s, sig) {
     if (s.exitCode != null) return;
@@ -296,6 +344,9 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   // Først pænt (som når et terminalvindue lukkes), så bestemt, og til sidst tvunget – nogle programmer ignorerer det første.
   function kill(s) {
     if (s.exitCode != null) return;
+    clearTimeout(s.initialPasteTimer);
+    s.initialPasteTimer = null;
+    s.queuedPaste = null;
     s.killed = true;
     signal(s, 'SIGHUP');
     s.killTimer1 = setTimeout(() => signal(s, 'SIGTERM'), 1500);
@@ -316,7 +367,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   function forceAll() { for (const s of sessions.values()) { s.killed = true; signal(s, 'SIGKILL'); } }
   const running = () => [...sessions.values()].filter((s) => s.exitCode == null).length;
 
-  return { create, get, attach, paste, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
+  return { create, get, attach, paste, approve, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
 }
 
 module.exports = { createSessions, lastLine, PASTE_MAX, BRIEF_QUIET_MS };

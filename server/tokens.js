@@ -230,6 +230,7 @@ function createTokens(config, { getRepoNames } = {}) {
       status: sessionView.status,
       logId: null,
       counts: emptyCounts(),
+      contextTokens: 0,
       byDay: {},
       modelsByDay: {},
     };
@@ -263,6 +264,8 @@ function createTokens(config, { getRepoNames } = {}) {
     const hits = new Map();
     let firstAt = null;
     let lastAt = null;
+    let contextTokens = 0;
+    let contextTs = -Infinity;
 
     await readJsonl(real, (obj) => {
       const ts = typeof obj.created_at === 'string' ? Date.parse(obj.created_at) : NaN;
@@ -284,9 +287,16 @@ function createTokens(config, { getRepoNames } = {}) {
       const out = nonNegInt(obj.output_tokens);
       if (inp + cr + cw + out === 0) return;
 
+      const ctx = inp + cr + cw;
+      const turnTs = Number.isFinite(ts) ? ts : st.mtimeMs;
+      if (ctx > 0 && turnTs >= contextTs) {
+        contextTs = turnTs;
+        contextTokens = ctx;
+      }
+
       const delta = { input: inp, cacheRead: cr, cacheWrite: cw, output: out, turns: 1 };
       addCounts(counts, delta);
-      const day = dayKey(Number.isFinite(ts) ? ts : st.mtimeMs);
+      const day = dayKey(turnTs);
       const model = safeModelName(obj.model) || 'gemini';
       addDayModel(byDay, modelsByDay, day, model, delta);
     });
@@ -299,6 +309,7 @@ function createTokens(config, { getRepoNames } = {}) {
       mtimeMs: Math.round(st.mtimeMs),
       detectedRepo: topRepoHit(hits),
       counts,
+      contextTokens,
       byDay,
       modelsByDay,
     };
@@ -338,6 +349,7 @@ function createTokens(config, { getRepoNames } = {}) {
       if (!prev || sum >= prev.sum) {
         turnsByKey.set(key, {
           sum,
+          idx: lineIdx,
           ts: Number.isFinite(ts) ? ts : st.mtimeMs,
           model: safeModelName(msg.model) || 'claude',
           delta: { input: inp, cacheRead: cr, cacheWrite: cw, output: out, turns: 1 },
@@ -348,9 +360,18 @@ function createTokens(config, { getRepoNames } = {}) {
     const counts = emptyCounts();
     const byDay = {};
     const modelsByDay = {};
+    let contextTokens = 0;
+    let latestTurnTs = -Infinity;
+    let latestTurnIdx = -1;
     for (const turn of turnsByKey.values()) {
       addCounts(counts, turn.delta);
       addDayModel(byDay, modelsByDay, dayKey(turn.ts), turn.model, turn.delta);
+      const ctx = turn.delta.input + turn.delta.cacheRead + turn.delta.cacheWrite;
+      if (ctx > 0 && (turn.ts > latestTurnTs || (turn.ts === latestTurnTs && turn.idx >= latestTurnIdx))) {
+        latestTurnTs = turn.ts;
+        latestTurnIdx = turn.idx;
+        contextTokens = ctx;
+      }
     }
 
     let detectedRepo = topRepoHit(hits);
@@ -368,6 +389,7 @@ function createTokens(config, { getRepoNames } = {}) {
       mtimeMs: Math.round(st.mtimeMs),
       detectedRepo,
       counts,
+      contextTokens,
       byDay,
       modelsByDay,
     };
@@ -437,6 +459,7 @@ function createTokens(config, { getRepoNames } = {}) {
       mtimeMs,
       detectedRepo,
       counts,
+      contextTokens: parent ? (parent.contextTokens || 0) : Math.max(0, ...entries.map((e) => e.parsed.contextTokens || 0)),
       byDay,
       modelsByDay,
     };
@@ -550,8 +573,10 @@ function createTokens(config, { getRepoNames } = {}) {
       if (!entry.logId) continue;
       const log = byLogId.get(entry.logId);
       if (!log) continue;
-      if (!entry.counts || entry.counts.total !== log.counts.total || entry.counts.turns !== log.counts.turns || entry.lastAt !== log.lastAt) {
+      const nextContextTokens = log.contextTokens || 0;
+      if (!entry.counts || entry.counts.total !== log.counts.total || entry.counts.turns !== log.counts.turns || entry.lastAt !== log.lastAt || entry.contextTokens !== nextContextTokens) {
         entry.counts = cloneCounts(log.counts);
+        entry.contextTokens = nextContextTokens;
         entry.byDay = log.byDay;
         entry.modelsByDay = log.modelsByDay;
         entry.lastAt = log.lastAt;
@@ -641,6 +666,7 @@ function createTokens(config, { getRepoNames } = {}) {
         startedAt: entry.startedAt,
         lastAt: entry.lastAt || entry.endedAt || entry.startedAt,
         counts: entry.counts || emptyCounts(),
+        contextTokens: entry.contextTokens || 0,
         byDay: entry.byDay || {},
         modelsByDay: entry.modelsByDay || {},
         matched: Boolean(entry.logId),
@@ -661,6 +687,7 @@ function createTokens(config, { getRepoNames } = {}) {
         startedAt: l.firstAt,
         lastAt: l.lastAt,
         counts: l.counts,
+        contextTokens: l.contextTokens || 0,
         byDay: l.byDay,
         modelsByDay: l.modelsByDay,
         matched: true,
@@ -739,6 +766,7 @@ function createTokens(config, { getRepoNames } = {}) {
         lastAt: rec.lastAt,
         models: Object.keys(sliced.models),
         ...c,
+        contextTokens: rec.contextTokens || 0,
       });
     }
 
@@ -768,7 +796,7 @@ function createTokens(config, { getRepoNames } = {}) {
     const sessionTokens = {};
     for (const rec of records) {
       if (rec.source !== 'control-tower') continue;
-      sessionTokens[rec.id] = { ...cloneCounts(rec.counts), matched: rec.matched };
+      sessionTokens[rec.id] = { ...cloneCounts(rec.counts), contextTokens: rec.contextTokens || 0, matched: rec.matched };
     }
     const byRepo = {};
     for (const r of agg.byRepo) {
