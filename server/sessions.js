@@ -4,7 +4,7 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
-const { createWaitChecker, isTaskDone } = require('./wait-check');
+const { createWaitChecker, hasApprovalPrompt, isTaskDone } = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -51,9 +51,31 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
   const isIdleAgent = (s) => s.exitCode == null && s.kind === 'agent' && Date.now() - s.lastOutputAt >= config.idleSeconds * 1000;
   const currentWait = (s) => (isIdleAgent(s) ? waitChecker.checkSync(s) : null);
 
+  function updateApprovalState(s) {
+    if (s.exitCode != null || s.kind !== 'agent') {
+      s.approvalSince = null;
+      return false;
+    }
+    const now = Date.now();
+    if (now < s.approvalCooldownUntil || !hasApprovalPrompt(s.buffer)) {
+      s.approvalSince = null;
+      return false;
+    }
+    if (!s.approvalSince) s.approvalSince = now;
+    return true;
+  }
+
+  function needsApproval(s) {
+    if (!updateApprovalState(s)) return false;
+    if (isIdleAgent(s)) return true;
+    const settleMs = Math.min(1500, Math.max(200, config.idleSeconds * 500));
+    return Date.now() - s.approvalSince >= settleMs;
+  }
+
   function status(s) {
     if (s.exitCode != null) return s.exitCode === 0 || s.killed ? 'afsluttet' : 'fejlet';
     if (s.kind === 'shell') return 'aaben';
+    if (needsApproval(s)) return 'venter';
     if (!isIdleAgent(s)) return 'arbejder';
     if (currentWait(s)) return 'afventer';
     return isTaskDone(s.buffer, { hadInput: s.hadUserInput }) ? 'faerdig' : 'venter';
@@ -61,11 +83,13 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
 
   function view(s) {
     const st = status(s);
+    const approval = st === 'venter' && s.approvalSince != null;
     const wait = st === 'afventer' ? currentWait(s) : null;
     return {
       id: s.id, repo: s.repo, kind: s.kind, agentId: s.agentId, name: s.name,
       startedAt: s.startedAt, lastOutputAt: s.lastOutputAt, endedAt: s.endedAt,
       exitCode: s.exitCode, status: st,
+      needsApproval: approval,
       waitingFor: wait ? wait.waitingFor : null,
       waitingDetail: wait ? wait.detail : null,
       lastLine: s.kind === 'agent' ? lastLine(s.buffer, s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
@@ -74,6 +98,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
   }
 
   async function refreshWaits() {
+    for (const s of sessions.values()) updateApprovalState(s);
     const idle = [...sessions.values()].filter(isIdleAgent);
     if (idle.length) await waitChecker.checkAll(idle);
   }
@@ -102,7 +127,8 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
       agentId: kind === 'agent' ? agent.id : null,
       name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
-      exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null, buffer: '', clients: new Set(), proc,
+      exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
+      approvalSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
     };
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
@@ -123,10 +149,18 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
         const nl = cut.indexOf('\n');
         s.buffer = nl !== -1 && nl < 8192 ? cut.slice(nl + 1) : cut;
       }
+      if (s.kind === 'agent' && !s.approvalTimer) {
+        s.approvalTimer = setTimeout(() => {
+          s.approvalTimer = null;
+          updateApprovalState(s);
+        }, 350);
+        s.approvalTimer.unref();
+      }
       for (const c of s.clients) c.onData(data);
     });
     proc.onExit(({ exitCode, signal }) => {
-      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2);
+      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer);
+      s.approvalTimer = null;
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
       s.endedAt = Date.now();
@@ -154,6 +188,10 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
         if (/[\r\n]/.test(data)) s.hadUserInput = true;
         // Enter, Ctrl+C eller Ctrl+U betyder, at en indsat tekst er sendt eller slettet.
         if (/[\r\n\x03\x15]/.test(data)) s.pendingPaste = false;
+        if (s.kind === 'agent' && /[\r\n\x03\x1b yYnN1-9]/.test(data)) {
+          s.approvalSince = null;
+          s.approvalCooldownUntil = Date.now() + 600;
+        }
         s.proc.write(data);
       },
       resize(cols, rows) {
