@@ -19,6 +19,7 @@
 
   const state = {
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
+    splitTerm: null, missionOnlyActive: true, missionCols: 2,
     brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
   };
 
@@ -277,26 +278,31 @@
     } catch (err) { toast(err.message, true); }
   }
 
-  function deskCard(s, withRepo) {
-    const st = STATUS[s.status] || STATUS.afsluttet;
-    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+  function quickApproveButtons(s, prefix = 'q') {
     const quick = [];
     if (s.exitCode == null && s.status === 'venter' && s.needsApproval) {
       quick.push(
-        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qenter:${s.id}`,
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `${prefix}enter:${s.id}`,
           onclick: () => quickApprove(s.id, 'enter', `Godkendte (Enter) hos ${s.name}`) }, 'Godkend (Enter)'),
-        h('button', { type: 'button', class: 'btn small', 'data-key': `qyes:${s.id}`,
+        h('button', { type: 'button', class: 'btn small', 'data-key': `${prefix}yes:${s.id}`,
           onclick: () => quickApprove(s.id, 'yes', `Sendte Ja (y) til ${s.name}`) }, 'Ja (y)'),
-        h('button', { type: 'button', class: 'btn small danger', 'data-key': `qesc:${s.id}`,
+        h('button', { type: 'button', class: 'btn small danger', 'data-key': `${prefix}esc:${s.id}`,
           onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
       );
     }
     if (s.exitCode == null && s.pendingPaste) {
       quick.push(
-        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qpaste:${s.id}`,
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `${prefix}paste:${s.id}`,
           onclick: () => quickApprove(s.id, 'enter', `Sendte indsat tekst til ${s.name}`) }, 'Send indsat tekst (Enter)'),
       );
     }
+    return quick;
+  }
+
+  function deskCard(s, withRepo) {
+    const st = STATUS[s.status] || STATUS.afsluttet;
+    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const quick = quickApproveButtons(s, 'q');
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status, false, s.role && s.role.icon),
       h('div', { class: 'deskinfo' },
@@ -373,18 +379,19 @@
     toastTimer = setTimeout(() => { t.className = 'toast'; }, 6000);
   }
 
-  const VALID_PAGES = new Set(['home', 'skills', 'tokens']);
-  const VALID_VIEWS = new Set(['overview', 'brain', 'roles', 'reports', 'issues', 'prs', 'skills']);
+  const VALID_PAGES = new Set(['home', 'mission', 'skills', 'tokens']);
+  const VALID_VIEWS = new Set(['overview', 'brain', 'roles', 'reports', 'issues', 'prs', 'skills', 'grid']);
   let lastHash = null;
 
   function buildHash() {
     if (!state.repo) {
-      if (state.page === 'skills' || state.page === 'tokens') return `#page=${state.page}`;
+      if (state.page === 'mission' || state.page === 'skills' || state.page === 'tokens') return `#page=${state.page}`;
       return '';
     }
     const p = new URLSearchParams();
     p.set('repo', state.repo);
     if (state.view && state.view !== 'overview') p.set('view', state.view);
+    if (state.view && state.view.startsWith('term:') && state.splitTerm) p.set('split', state.splitTerm);
     if (state.view === 'issues' && state.issue[state.repo] != null) p.set('issue', String(state.issue[state.repo]));
     else if (state.view === 'prs' && state.pr[state.repo] != null) p.set('pr', String(state.pr[state.repo]));
     else if (state.view === 'brain' && state.brainFile[state.repo]) p.set('brainFile', state.brainFile[state.repo]);
@@ -411,6 +418,8 @@
       state.page = 'home';
       const v = p.get('view') || 'overview';
       state.view = (VALID_VIEWS.has(v) || /^term:[a-f0-9]+$/.test(v)) ? v : 'overview';
+      const sp = p.get('split');
+      state.splitTerm = (state.view.startsWith('term:') && sp && /^[a-f0-9]+$/.test(sp) && sp !== state.view.slice(5)) ? sp : null;
       const issueNum = Number(p.get('issue'));
       if (Number.isInteger(issueNum) && issueNum > 0) state.issue[repo] = issueNum;
       else delete state.issue[repo];
@@ -425,6 +434,7 @@
       const page = p.get('page');
       state.page = VALID_PAGES.has(page) ? page : 'home';
       state.view = 'overview';
+      state.splitTerm = null;
     }
     lastHash = location.hash;
   }
@@ -794,8 +804,13 @@
     ].filter(Boolean));
     const f = state.filter.trim().toLowerCase();
     const repos = sortRepos(d.repos.filter((r) => !f || r.name.toLowerCase().includes(f)));
-    const cur = (el, on) => { if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
+    const cur = (el, on) => { if (!el) return; if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
     cur($('home'), !state.repo && state.page === 'home');
+    if ($('missionnav')) {
+      cur($('missionnav'), !state.repo && state.page === 'mission');
+      const activeCount = d.sessions.filter((s) => s.exitCode == null).length;
+      $('missionnav').textContent = activeCount ? `Mission Control (${activeCount})` : 'Mission Control';
+    }
     cur($('skillsnav'), !state.repo && state.page === 'skills');
     cur($('tokensnav'), !state.repo && state.page === 'tokens');
     $('repolist').replaceChildren(...repos.map((r) => {
@@ -841,16 +856,22 @@
         : h('p', { class: 'empty', text: state.offline ? 'Kan ikke få forbindelse til Control Tower.' : 'Indlæser…' }));
       return;
     }
+    if (!state.repo && state.page === 'mission') { main.replaceChildren(h('h2', { text: 'Mission Control' }), h('section', { id: 'panel', class: 'panel' })); missionPanel($('panel'), null); return; }
     if (!state.repo && state.page === 'skills') { main.replaceChildren(h('h2', { text: 'Skills' }), h('section', { id: 'panel', class: 'panel' })); skillsPanel($('panel'), null); return; }
     if (!state.repo && state.page === 'tokens') { main.replaceChildren(h('h2', { text: 'Token-regnskab' }), h('section', { id: 'panel', class: 'panel' })); tokensPanel($('panel')); return; }
     if (!state.repo) { main.replaceChildren(dashboard()); return; }
     const repo = state.data.repos.find((r) => r.name === state.repo);
     if (state.view.startsWith('term:') && !sessionsFor(state.repo).some((s) => s.id === state.view.slice(5))) {
       state.view = 'overview';
+      state.splitTerm = null;
+      syncUrl(true);
+    }
+    if (state.view === 'grid' && !sessionsFor(state.repo).length) {
+      state.view = 'overview';
       syncUrl(true);
     }
     // Mappen kan være slettet eller omdøbt, mens en agent stadig kører i den. Så vises kun dens sessioner.
-    if (!repo && !state.view.startsWith('term:')) {
+    if (!repo && !state.view.startsWith('term:') && state.view !== 'grid') {
       const first = sessionsFor(state.repo)[0];
       if (!first) { state.repo = null; state.view = 'overview'; syncUrl(true); renderChrome(); main.replaceChildren(dashboard()); return; }
       state.view = `term:${first.id}`;
@@ -878,7 +899,9 @@
     const exists = state.data.repos.some((r) => r.name === state.repo);
     const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['roles', 'Roller'], ['reports', 'Rapporter'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
     const nodes = list.map(([id, label]) => tabButton(id, label));
-    for (const s of sessionsFor(state.repo)) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
+    const repoSessions = sessionsFor(state.repo);
+    if (repoSessions.length >= 2) nodes.push(tabButton('grid', `◫ Split (${repoSessions.length})`));
+    for (const s of repoSessions) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
     const key = focusKey();
     tabs.replaceChildren(...nodes);
     refocus(key);
@@ -904,6 +927,7 @@
     else if (state.view === 'roles') rolesPanel(panel);
     else if (state.view === 'reports') reportsPanel(panel);
     else if (state.view === 'skills') skillsPanel(panel, state.repo);
+    else if (state.view === 'grid') missionPanel(panel, state.repo);
     else termPanel(panel, state.view.slice(5));
   }
 
@@ -911,16 +935,23 @@
   function renderLive() {
     if (!state.data) { renderMain(); return; }
     if (!state.repo && (state.page === 'skills' || state.page === 'tokens')) return;
+    if (!state.repo && state.page === 'mission') {
+      if (!$('panel')) { renderMain(); return; }
+      updateMissionLive($('panel'), null);
+      return;
+    }
     if (!$('tabs') && !$('dash')) { renderMain(); return; }
     if (!state.repo) { $('main').replaceChildren(dashboard()); return; }
     renderTabs();
     if (state.view === 'overview') $('panel').replaceChildren(repoOverview());
+    else if (state.view === 'grid') updateMissionLive($('panel'), state.repo);
     const live = $('termstatus');
     if (live && state.view.startsWith('term:')) {
       const s = state.data.sessions.find((x) => x.id === state.view.slice(5));
       if (s) {
         live.replaceChildren(...termStatus(s));
         updateTermButtons(s);
+        updateSplitLive();
         // Når agenten går fra at arbejde til at vente eller slutte, foldes resuméet ud af sig selv.
         const det = $('sumdetails');
         if (det && det.dataset.status !== s.status) {
@@ -1922,24 +1953,121 @@
     ];
   }
 
+  function ensureTerm(s) {
+    let t = state.terms.get(s.id);
+    if (t && t.closed && s.exitCode == null) { disposeTerm(t); t = null; }
+    if (!t) { t = makeTerm(s.id); state.terms.set(s.id, t); }
+    return t;
+  }
+
+  function mountTerm(t, focus) {
+    if (!t.opened) { t.term.open(t.host); t.opened = true; }
+    requestAnimationFrame(() => {
+      try { t.fit.fit(); } catch { /* ikke synlig */ }
+      if (focus) t.term.focus();
+    });
+  }
+
+  function splitPicker(s, splitSession) {
+    if (splitSession) {
+      return h('span', { class: 'splitpicker', id: 'splitbox' },
+        h('button', {
+          type: 'button', class: 'btn small',
+          title: 'Byt venstre og højre terminal',
+          onclick: () => {
+            const oldPrimary = s.id;
+            state.splitTerm = oldPrimary;
+            if (splitSession.repo !== state.repo) go(splitSession.repo, `term:${splitSession.id}`);
+            else { state.view = `term:${splitSession.id}`; syncUrl(false); renderTabs(); renderPanel(); }
+          },
+        }, '⇄ Byt side'),
+        h('button', {
+          type: 'button', class: 'btn small',
+          onclick: () => { state.splitTerm = null; syncUrl(false); renderPanel(); },
+        }, '✕ Luk split'));
+    }
+    const others = (state.data.sessions || [])
+      .filter((x) => x.id !== s.id)
+      .sort((a, b) => (b.repo === s.repo) - (a.repo === s.repo) || (a.exitCode != null) - (b.exitCode != null) || b.startedAt - a.startedAt);
+    if (!others.length) return h('span', { class: 'splitpicker', id: 'splitbox' });
+    if (others.length === 1) {
+      const o = others[0];
+      const lbl = o.repo === s.repo ? o.name : `${o.name} (${o.repo})`;
+      return h('span', { class: 'splitpicker', id: 'splitbox' },
+        h('button', {
+          type: 'button', class: 'btn small',
+          onclick: () => { state.splitTerm = o.id; syncUrl(false); renderPanel(); },
+        }, `◫ Del skærm: ${lbl}`));
+    }
+    const sel = h('select', {
+      'aria-label': 'Del skærm med anden session',
+      onchange: (e) => {
+        if (!e.target.value) return;
+        state.splitTerm = e.target.value;
+        syncUrl(false);
+        renderPanel();
+      },
+    },
+      h('option', { value: '' }, '◫ Del skærm med…'),
+      others.map((o) => h('option', { value: o.id }, `${o.repo === s.repo ? o.name : `${o.name} · ${o.repo}`} (${(STATUS[o.status] || STATUS.afsluttet).label})`)));
+    return h('span', { class: 'splitpicker', id: 'splitbox' }, sel);
+  }
+
+  function renderSplitPane(ps, pt, isPrimary) {
+    return h('div', { class: 'termpane', 'data-pane': ps.id },
+      h('div', { class: 'termpanebar' },
+        h('span', { class: 'termpanetitle' },
+          h('strong', { text: ps.name }),
+          ps.repo !== state.repo ? chip(ps.repo, 'muted') : null,
+          h('span', { class: 'termstatus', 'data-panestatus': ps.id }, termStatus(ps))),
+        h('span', { class: 'termpaneactions' },
+          h('span', { 'data-panequick': ps.id, class: 'quickactions', style: 'margin-top:0' }, quickApproveButtons(ps, 'pq')),
+          !isPrimary ? h('button', {
+            type: 'button', class: 'btn small',
+            title: 'Åbn denne terminal i fuld bredde',
+            onclick: () => { state.splitTerm = null; go(ps.repo, `term:${ps.id}`); },
+          }, '⤢ Kun denne') : null)),
+      pt.host);
+  }
+
+  function updateSplitLive() {
+    if (!state.splitTerm) return;
+    const sp = state.data.sessions.find((x) => x.id === state.splitTerm);
+    if (!sp) {
+      state.splitTerm = null;
+      syncUrl(true);
+      if ($('panel') && state.view.startsWith('term:')) termPanel($('panel'), state.view.slice(5));
+      return;
+    }
+    for (const id of [state.view.slice(5), state.splitTerm]) {
+      const s = state.data.sessions.find((x) => x.id === id);
+      if (!s) continue;
+      for (const el of document.querySelectorAll(`[data-panestatus="${s.id}"]`)) el.replaceChildren(...termStatus(s));
+      for (const el of document.querySelectorAll(`[data-panequick="${s.id}"]`)) el.replaceChildren(...quickApproveButtons(s, 'pq'));
+    }
+  }
+
   function termPanel(panel, id) {
     const s = state.data.sessions.find((x) => x.id === id);
-    if (!s) { state.view = 'overview'; renderTabs(); renderPanel(); return; }
-    let t = state.terms.get(id);
-    if (t && t.closed && s.exitCode == null) { disposeTerm(t); t = null; }
-    if (!t) { t = makeTerm(id); state.terms.set(id, t); }
+    if (!s) { state.view = 'overview'; state.splitTerm = null; renderTabs(); renderPanel(); return; }
+    let splitSession = state.splitTerm && state.splitTerm !== id
+      ? state.data.sessions.find((x) => x.id === state.splitTerm) : null;
+    if (!splitSession && state.splitTerm) { state.splitTerm = null; syncUrl(true); }
+    const t = ensureTerm(s);
+    const t2 = splitSession ? ensureTerm(splitSession) : null;
     panel.className = 'panel term';
     panel.replaceChildren(
       h('div', { class: 'panelbar' },
         h('span', { class: 'termtitle' }, h('strong', { text: s.name }), ` i ${s.repo}`),
         h('span', { id: 'termstatus', class: 'termstatus' }, termStatus(s)),
         h('span', { class: 'hint', id: 'termhint' }),
+        splitPicker(s, splitSession),
         h('span', { id: 'askbox' }),
         h('span', { id: 'termbuttons', class: 'termbuttons' })),
-      s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: s.status !== 'arbejder' && s.status !== 'afventer' },
+      s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: !splitSession && s.status !== 'arbejder' && s.status !== 'afventer' },
         h('summary', { text: 'Resumé: hvad er der sket siden start' }),
         h('div', { 'data-sumbox': s.id, tabindex: '0', role: 'region', 'aria-label': 'Resumé' }, summaryBody(s, state.summary[s.id] && state.summary[s.id].data))) : null,
-      t.host);
+      splitSession ? h('div', { class: 'termsplit' }, renderSplitPane(s, t, true), renderSplitPane(splitSession, t2, false)) : t.host);
     const det = $('sumdetails');
     if (det) {
       const load = () => api(`/api/sessions/${s.id}/summary`).then((data) => {
@@ -1947,12 +2075,113 @@
         const box = document.querySelector(`[data-sumbox="${s.id}"]`);
         if (box) box.replaceChildren(...summaryBody(s, data));
       }).catch(() => {});
-      det.addEventListener('toggle', () => { if (det.open) load(); try { t.fit.fit(); } catch { /* ikke synlig */ } });
+      det.addEventListener('toggle', () => {
+        if (det.open) load();
+        try { t.fit.fit(); if (t2) t2.fit.fit(); } catch { /* ikke synlig */ }
+      });
       if (det.open) load();
     }
     updateTermButtons(s);
-    if (!t.opened) { t.term.open(t.host); t.opened = true; }
-    requestAnimationFrame(() => { try { t.fit.fit(); } catch { /* ikke synlig */ } t.term.focus(); });
+    mountTerm(t, true);
+    if (t2) mountTerm(t2, false);
+  }
+
+  function missionSessions(repoScope) {
+    const all = (repoScope ? sessionsFor(repoScope) : (state.data && state.data.sessions || []))
+      .slice()
+      .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+    if (!repoScope && state.missionOnlyActive) {
+      const active = all.filter((s) => s.exitCode == null);
+      if (active.length) return { list: active, allCount: all.length, activeCount: active.length };
+    }
+    return { list: all, allCount: all.length, activeCount: all.filter((s) => s.exitCode == null).length };
+  }
+
+  function cellStopButtons(s) {
+    if (s.exitCode == null) return [confirmButton('Stop', 'Bekræft stop', 'danger', () => removeSession(s.id, false))];
+    return [h('button', { type: 'button', class: 'btn small', onclick: () => removeSession(s.id, true) }, 'Fjern')];
+  }
+
+  function missionPanel(panel, repoScope) {
+    for (const t of state.terms.values()) t.host.remove();
+    const { list, allCount, activeCount } = missionSessions(repoScope);
+    const bar = h('div', { class: 'missionbar' },
+      h('p', { class: 'sub', 'data-missioncount': '1',
+        text: repoScope
+          ? `${plural(list.length, 'session', 'sessioner')} i ${repoScope} side om side.`
+          : `Live multi-terminal overblik (${activeCount} aktive af ${allCount} sessioner). Klik direkte i en terminal for at skrive.` }),
+      h('div', { class: 'cardactions' },
+        !repoScope && allCount > activeCount ? h('button', {
+          type: 'button', class: 'btn small',
+          onclick: () => { state.missionOnlyActive = !state.missionOnlyActive; missionPanel(panel, repoScope); },
+        }, state.missionOnlyActive ? `Vis også afsluttede (${allCount - activeCount})` : 'Kun aktive') : null,
+        list.length >= 2 ? h('button', {
+          type: 'button', class: 'btn small',
+          onclick: () => { state.missionCols = state.missionCols === 1 ? 2 : 1; missionPanel(panel, repoScope); },
+        }, state.missionCols === 1 ? '◫ 2 kolonner' : '▭ 1 kolonne') : null));
+
+    if (!list.length) {
+      panel.replaceChildren(bar, h('p', { class: 'empty', text: 'Der kører ingen terminaler eller agenter lige nu. Start en agent fra et repo for at se den live her.' }));
+      return;
+    }
+
+    const toMount = [];
+    const grid = h('div', {
+      class: `missiongrid${state.missionCols === 1 ? ' cols1' : ''}`,
+      'data-missiongrid': repoScope || '*',
+      'data-ids': list.map((s) => s.id).join(','),
+    }, list.map((s) => {
+      const st = STATUS[s.status] || STATUS.afsluttet;
+      const t = ensureTerm(s);
+      toMount.push(t);
+      return h('div', { class: `termcell ${st.cls}`, 'data-cell': s.id },
+        h('div', { class: 'termcellbar' },
+          h('span', { class: 'termcellhead' },
+            h('strong', { text: s.name }),
+            !repoScope ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(s.repo, 'overview') }, s.repo) : null,
+            h('span', { class: 'termstatus', 'data-cellstatus': s.id }, termStatus(s))),
+          h('span', { class: 'termcellactions' },
+            h('span', { 'data-cellquick': s.id, class: 'quickactions', style: 'margin-top:0' }, quickApproveButtons(s, 'mq')),
+            h('button', {
+              type: 'button', class: 'btn small',
+              title: `Åbn ${s.name} i fuld skærm`,
+              onclick: () => { state.splitTerm = null; go(s.repo, `term:${s.id}`); },
+            }, '⤢ Fuld skærm'),
+            h('span', { 'data-cellstop': s.id, 'data-running': String(s.exitCode == null) }, cellStopButtons(s)))),
+        t.host);
+    }));
+
+    panel.replaceChildren(bar, grid);
+    toMount.forEach((t, i) => mountTerm(t, i === 0));
+  }
+
+  function updateMissionLive(panel, repoScope) {
+    if (!panel) return;
+    const grid = panel.querySelector('[data-missiongrid]');
+    const { list, allCount, activeCount } = missionSessions(repoScope);
+    const nextIds = list.map((s) => s.id).join(',');
+    if (!grid || grid.dataset.ids !== nextIds) {
+      missionPanel(panel, repoScope);
+      return;
+    }
+    const cnt = panel.querySelector('[data-missioncount]');
+    if (cnt && !repoScope) {
+      cnt.textContent = `Live multi-terminal overblik (${activeCount} aktive af ${allCount} sessioner). Klik direkte i en terminal for at skrive.`;
+    }
+    for (const s of list) {
+      const st = STATUS[s.status] || STATUS.afsluttet;
+      const cell = grid.querySelector(`[data-cell="${s.id}"]`);
+      if (cell) cell.className = `termcell ${st.cls}`;
+      const statusEl = grid.querySelector(`[data-cellstatus="${s.id}"]`);
+      if (statusEl) statusEl.replaceChildren(...termStatus(s));
+      const quickEl = grid.querySelector(`[data-cellquick="${s.id}"]`);
+      if (quickEl) quickEl.replaceChildren(...quickApproveButtons(s, 'mq'));
+      const stopEl = grid.querySelector(`[data-cellstop="${s.id}"]`);
+      if (stopEl && stopEl.dataset.running !== String(s.exitCode == null)) {
+        stopEl.dataset.running = String(s.exitCode == null);
+        stopEl.replaceChildren(...cellStopButtons(s));
+      }
+    }
   }
 
   async function askSummary(id) {
@@ -1985,6 +2214,7 @@
       state.stoppedByMe.add(id); // du har selv stoppet den – det behøver du ikke få besked om
       await api(`/api/sessions/${id}`, { method: 'DELETE' });
       if (removed && state.view === `term:${id}`) state.view = 'overview';
+      if (removed && state.splitTerm === id) state.splitTerm = null;
       state.sig = null;
       await refresh();
       if (removed) { renderTabs(); renderPanel(); refocus(`tab:${state.view}`); }
@@ -2165,6 +2395,7 @@
   $('soundbtn').addEventListener('click', () => { savePref('sound', !prefs.sound); renderPrefs(); if (prefs.sound) ding('venter'); });
   renderPrefs();
   $('home').addEventListener('click', () => go(null));
+  if ($('missionnav')) $('missionnav').addEventListener('click', () => go(null, null, 'mission'));
   $('skillsnav').addEventListener('click', () => go(null, null, 'skills'));
   $('tokensnav').addEventListener('click', () => go(null, null, 'tokens'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
