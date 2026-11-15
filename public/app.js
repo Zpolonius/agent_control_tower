@@ -93,7 +93,24 @@
   }
 
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
-  function robot(status, mini) {
+  // Rollens kendetegn: et lille mærke ved figuren (lup, skjold, kolbe, pensel, klippebord, skruenøgle).
+  function roleMark(icon) {
+    const P = {
+      lup: [sv('circle', { cx: 98, cy: 14, r: 5 }), sv('line', { x1: 101.6, y1: 17.6, x2: 106, y2: 22 })],
+      skjold: [sv('path', { d: 'M100 6.5l7 3v5c0 4.6-3 7.6-7 9.5c-4-1.9-7-4.9-7-9.5v-5z' })],
+      kolbe: [sv('path', { d: 'M97 7h6M98.2 7v5.6l-4.8 8.4h13.2l-4.8-8.4V7' })],
+      pensel: [sv('path', { d: 'M94.5 22.5l9.5-11.5M104 11l2.6-2.6' }), sv('circle', { cx: 94.6, cy: 22.4, r: 1.6 })],
+      klippebord: [sv('rect', { x: 94, y: 8.5, width: 12, height: 14.5, rx: 1.5 }), sv('path', { d: 'M97.5 7h5v3h-5zM96.8 14h6.4M96.8 17.5h6.4' })],
+      skruenoegle: [sv('path', { d: 'M95 23l7.8-7.8' }), sv('path', { d: 'M102.4 15.6a4.2 4.2 0 1 0 2.4-6.2l-2 2 .3 2.4 2.4.3 2-2' })],
+      robot: [sv('rect', { x: 94.5, y: 10, width: 11, height: 9, rx: 2.5 }), sv('path', { d: 'M100 10V7' })],
+    };
+    return sv('g', { class: 'rolemark' }, sv('circle', { class: 'rolebg', cx: 100, cy: 15, r: 11.5 }), ...(P[icon] || P.robot));
+  }
+  function roleIcon(icon) {
+    return sv('svg', { class: 'roleicon', viewBox: '87 2.5 26 26', 'aria-hidden': 'true', focusable: 'false' }, roleMark(icon));
+  }
+
+  function robot(status, mini, icon) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
     const mark = { wait: '?', extwait: '…', quota: '◴', ready: '✓', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
@@ -112,7 +129,8 @@
       sv('path', { class: 'mouth', d: st === 'fail' ? 'M31 40q5 -4 10 0' : 'M31 38q5 4 10 0' }),
       st === 'wait' ? sv('line', { class: 'arm wave', x1: 49, y1: 52, x2: 60, y2: 30 }) : sv('line', { class: 'arm right', x1: 49, y1: 56, x2: 64, y2: 65 }),
       sv('line', { class: 'arm left', x1: 23, y1: 56, x2: 14, y2: 65 }),
-      mark ? sv('text', { class: 'mark', x: 70, y: 32 }, mark) : null);
+      mark ? sv('text', { class: 'mark', x: 70, y: 32 }, mark) : null,
+      icon ? roleMark(icon) : null);
   }
 
   function dur(ms) {
@@ -129,6 +147,7 @@
     return `har arbejdet i ${dur(s.startedAt)}`;
   }
   function bubbleText(s) {
+    if (s.briefPending && s.exitCode == null) return `Starter op – opgaven som ${s.role ? s.role.name : 'rolle'} bliver indsat, når agenten er klar.`;
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
     if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
@@ -279,7 +298,7 @@
       );
     }
     return h('li', { class: `deskcard ${st.cls}` },
-      robot(s.status),
+      robot(s.status, false, s.role && s.role.icon),
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
         h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
@@ -355,7 +374,7 @@
   }
 
   const VALID_PAGES = new Set(['home', 'skills', 'tokens']);
-  const VALID_VIEWS = new Set(['overview', 'brain', 'issues', 'prs', 'skills']);
+  const VALID_VIEWS = new Set(['overview', 'brain', 'roles', 'reports', 'issues', 'prs', 'skills']);
   let lastHash = null;
 
   function buildHash() {
@@ -857,7 +876,7 @@
     if (!tabs) return;
     syncUrl(true);
     const exists = state.data.repos.some((r) => r.name === state.repo);
-    const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
+    const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['roles', 'Roller'], ['reports', 'Rapporter'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
     const nodes = list.map(([id, label]) => tabButton(id, label));
     for (const s of sessionsFor(state.repo)) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
     const key = focusKey();
@@ -882,6 +901,8 @@
     else if (state.view === 'brain') brainPanel(panel);
     else if (state.view === 'prs') prPanel(panel);
     else if (state.view === 'issues') issuesPanel(panel);
+    else if (state.view === 'roles') rolesPanel(panel);
+    else if (state.view === 'reports') reportsPanel(panel);
     else if (state.view === 'skills') skillsPanel(panel, state.repo);
     else termPanel(panel, state.view.slice(5));
   }
@@ -1274,6 +1295,114 @@
     });
   }
 
+  // ---------- roller og rapporter ----------
+  // Hvilken agent rollerne startes med, huskes i browseren. Du vælger hver gang, men det sidste valg står klar.
+  function roleAgent() {
+    let id = null;
+    try { id = localStorage.getItem('ct-role-agent'); } catch { /* privat tilstand */ }
+    const agents = state.data.agents;
+    return (agents.find((a) => a.id === id) || agents[0] || {}).id || null;
+  }
+  function setRoleAgent(id) { try { localStorage.setItem('ct-role-agent', id); } catch { /* privat tilstand */ } }
+
+  function agentPicker(idFor) {
+    const agents = state.data.agents;
+    if (!agents.length) return h('p', { class: 'formnote', text: 'Der er ingen agenter i indstillingsfilen. Tilføj en under "agents", og start Control Tower igen.' });
+    const current = roleAgent();
+    return h('label', { class: 'rolepick', for: idFor }, 'Agent ',
+      h('select', { id: idFor, onchange: (e) => setRoleAgent(e.target.value) },
+        agents.map((a) => h('option', { value: a.id, selected: a.id === current }, a.name))));
+  }
+
+  const MODE = { report: ['Finder og rapporterer', 'muted'], develop: ['Retter kode', 'warn'] };
+  const STACKTXT = { typescript: 'TypeScript/JavaScript', kotlin: 'Kotlin/Android', flutter: 'Flutter/Dart' };
+
+  async function rolesPanel(panel) {
+    const repo = state.repo;
+    const still = () => state.repo === repo && state.view === 'roles';
+    panel.replaceChildren(h('p', { class: 'empty', text: 'Finder roller…' }));
+    let data;
+    try { data = await api(`/api/roles?repo=${encodeURIComponent(repo)}`); } catch (err) {
+      if (still()) panel.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+      return;
+    }
+    if (!still()) return;
+    const focus = h('textarea', { id: 'rolefocus', rows: '2', maxlength: '20000', placeholder: 'Fx: kig især på login og betaling – eller skriv opgaven til Udvikler / Issue-PO.' });
+    const stacks = data.stacks.length ? data.stacks.map((x) => STACKTXT[x] || x).join(', ') : 'ingen kendt teknologi fundet';
+    const card = (r) => h('li', { class: 'rolecard' },
+      h('div', { class: 'rolehead' }, roleIcon(r.icon), h('h3', { class: 'rolename', text: r.name })),
+      h('p', { class: 'roledesc', text: r.description || 'Ingen beskrivelse.' }),
+      h('p', { class: 'cardrow' }, chip(MODE[r.mode][0], MODE[r.mode][1]),
+        r.hasRepoNotes ? chip('Har tillæg i dette repo', 'ok') : null,
+        r.source === 'repo' ? chip('Rolle fra dette repo', 'ok') : null),
+      h('button', { type: 'button', class: 'btn', 'data-key': `role:${r.id}`, 'aria-label': `Start ${r.name} i ${repo}`,
+        disabled: !state.data.agents.length,
+        onclick: () => start('agent', $('roleagent').value, repo, r.id, focus.value.trim()) }, `Start ${r.name}`));
+    panel.replaceChildren(
+      h('div', { class: 'rolebar' },
+        h('p', { class: 'sub' }, h('strong', { text: 'Fundet i repoet: ' }), stacks),
+        agentPicker('roleagent')),
+      h('label', { class: 'rolefocuslabel', for: 'rolefocus', text: 'Fokus eller opgave (valgfrit)' }), focus,
+      data.roles.length ? h('ul', { class: 'rolegrid' }, data.roles.map(card))
+        : h('p', { class: 'empty', text: 'Der blev ikke fundet nogen roller. De ligger i mappen "roles" ved siden af Control Tower.' }),
+      h('p', { class: 'hint', text: 'Gennemgangs-rollerne ændrer ikke din kode – de skriver en rapport i docs/reports, som du finder under Rapporter. Et repo kan give en rolle et tillæg i .control-tower/roles/<rolle>.md, fx security.md.' }));
+  }
+
+  const SEV = { kritisk: 'fail', høj: 'fail', middel: 'warn', lav: 'muted', info: 'muted' };
+
+  async function reportsPanel(panel) {
+    const repo = state.repo;
+    const still = () => state.repo === repo && state.view === 'reports';
+    panel.replaceChildren(h('p', { class: 'empty', text: 'Finder rapporter…' }));
+    let data;
+    try { data = await api(`/api/roles?repo=${encodeURIComponent(repo)}`); } catch (err) {
+      if (still()) panel.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+      return;
+    }
+    if (!still()) return;
+    if (!data.reports.length) {
+      panel.replaceChildren(h('p', { class: 'empty', text: 'Ingen rapporter endnu. Start en rolle under Roller – når den er færdig, ligger dens rapport her (filer i docs/reports).' }));
+      return;
+    }
+    const has = (id) => data.roles.some((r) => r.id === id);
+    const roleName = (id) => (data.roles.find((r) => r.id === id) || {}).name || id;
+    const view = h('article', { class: 'reportview', tabindex: '-1' });
+    const nav = h('ul', { class: 'brainfiles', 'aria-label': 'Rapporter' });
+    const open = async (name) => {
+      state.report = state.report || {};
+      state.report[repo] = name;
+      for (const b of nav.querySelectorAll('button')) { if (b.dataset.name === name) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); }
+      view.replaceChildren(h('p', { class: 'empty', text: 'Åbner…' }));
+      let f;
+      try { f = await api(`/api/reports/file?repo=${encodeURIComponent(repo)}&name=${encodeURIComponent(name)}`); } catch (err) {
+        view.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message })); return;
+      }
+      if (!state.report || state.report[repo] !== name) return;
+      const text = (x) => `Fund ${x.id} fra rapporten docs/reports/${name}${x.severity ? ` (alvor: ${x.severity})` : ''}: ${x.title}\n\n${x.body}`;
+      const send = (roleId, input) => start('agent', $('reportagent').value, repo, roleId, input);
+      const findings = f.findings.filter((x) => x.severity !== 'info');
+      view.replaceChildren(...[
+        h('div', { class: 'panelbar' }, h('p', { class: 'filemeta', text: `docs/reports/${name}${f.truncated ? ' · viser kun starten' : ''}` }), agentPicker('reportagent')),
+        findings.length && has('po') ? h('button', { type: 'button', class: 'btn', onclick: () => send('po', findings.map(text).join('\n\n---\n\n')) }, `Lav issues af alle ${findings.length} fund`) : null,
+        f.findings.length ? h('ul', { class: 'findings' }, f.findings.map((x) => h('li', { class: 'finding' },
+          h('div', { class: 'reviewhead' },
+            h('span', {}, h('strong', { text: x.id }), ' ', x.severity ? chip(x.severity, SEV[x.severity]) : null, ' ', x.title),
+            h('span', { class: 'findactions' },
+              has('udvikler') && x.severity !== 'info' ? h('button', { type: 'button', class: 'btn small primary', 'aria-label': `Send ${x.id} til Udvikler`, onclick: () => send('udvikler', text(x)) }, 'Send til Udvikler') : null,
+              has('po') && x.severity !== 'info' ? h('button', { type: 'button', class: 'btn small', 'aria-label': `Lav issue af ${x.id}`, onclick: () => send('po', text(x)) }, 'Lav issue') : null)),
+          window.renderMarkdown(x.body)))) : window.renderMarkdown(f.content),
+      ].filter(Boolean));
+    };
+    for (const r of data.reports) {
+      nav.append(h('li', {}, h('button', { type: 'button', 'data-name': r.name, onclick: () => open(r.name) },
+        h('span', { text: r.roleId ? roleName(r.roleId) : r.name }), h('small', { text: `${r.date || ''} · ${ago(r.mtime)}` }))));
+    }
+    panel.className = 'panel brain';
+    panel.replaceChildren(nav, view);
+    const wanted = state.report && state.report[repo];
+    open(data.reports.some((r) => r.name === wanted) ? wanted : data.reports[0].name);
+  }
+
   // ---------- issues ----------
   // Husker hvilken skill du sidst brugte til issues i hvert repo (kun i denne browser).
   function savedSkill(repo) {
@@ -1637,10 +1766,13 @@
     }
   }
 
-  async function start(kind, agentId, repoName) {
+  async function start(kind, agentId, repoName, roleId, input) {
     const repo = repoName || state.repo;
     try {
-      const s = await api('/api/sessions', { method: 'POST', body: { repo, kind, agentId } });
+      const body = { repo, kind, agentId };
+      if (roleId) { body.roleId = roleId; if (input) body.input = input; }
+      const s = await api('/api/sessions', { method: 'POST', body });
+      if (roleId) toast(`${s.name} starter. Opgaven indsættes, når agenten er klar – læs den, og tryk Enter.`);
       state.sig = null;
       await refresh();
       if (repoName) go(repo, `term:${s.id}`);

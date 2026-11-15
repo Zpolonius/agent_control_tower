@@ -343,3 +343,26 @@ h2:focus { outline: none; }
   .termhost { flex: none; height: 60vh; min-height: 240px; }
   .brainfiles { max-height: 180px; }
 }
+
+/* ---- roller ---- */
+.robot .rolemark .rolebg { fill: var(--panel2); stroke: var(--tone); stroke-width: 1.5; }
+.robot .rolemark path, .robot .rolemark line, .robot .rolemark circle:not(.rolebg), .robot .rolemark rect { fill: none; stroke: var(--tone); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.roleicon { width: 34px; height: 34px; flex: none; --tone: var(--bring); }
+.roleicon .rolebg { fill: var(--panel2); stroke: var(--tone); stroke-width: 1.2; }
+.roleicon path, .roleicon line, .roleicon circle:not(.rolebg), .roleicon rect { fill: none; stroke: var(--tone); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.rolebar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.rolepick { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.rolepick select { background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 6px 8px; }
+.rolefocuslabel { display: block; font-weight: 600; margin-bottom: 4px; }
+#rolefocus { width: 100%; max-width: 760px; background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 8px 10px; font: inherit; color: inherit; resize: vertical; }
+#rolefocus::placeholder { color: var(--muted); }
+.rolegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 16px 0 10px; }
+.rolecard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 8px; grid-template-rows: auto 1fr auto auto; }
+.rolehead { display: flex; align-items: center; gap: 10px; }
+.rolehead h3.rolename { margin: 0; font: 700 16px var(--sans); text-transform: none; letter-spacing: 0; color: var(--text); }
+.roledesc { color: var(--muted); font-size: 13px; margin: 0; }
+.rolecard .btn { justify-self: start; }
+.reportview { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 18px; overflow: auto; min-width: 0; }
+.findings { display: grid; gap: 10px; margin-top: 12px; }
+.finding { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--bg); }
+.findactions { display: inline-flex; gap: 6px; flex-wrap: wrap; }

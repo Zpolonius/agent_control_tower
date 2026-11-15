@@ -11,6 +11,11 @@ const {
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
+// Hvor længe en agent skal være stille efter opstart, før rollens beskrivelse indsættes – og hvor længe der højst ventes.
+const BRIEF_QUIET_MS = 1500;
+const BRIEF_MAX_WAIT_MS = 20000;
+// Skriver agenten slet intet efter start, ventes der lidt længere end ellers, så et langsomt program kan nå at starte.
+const BRIEF_SILENT_MS = 5000;
 const isWin = process.platform === 'win32';
 
 function shellCommand(agentCommand) {
@@ -130,6 +135,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       waitingDetail: quota ? quota.detail : (wait ? wait.detail : null),
       lastLine: s.kind === 'agent' ? lastLine(s.buffer, s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
       pendingPaste: s.pendingPaste,
+      role: s.role, briefPending: !!s.pendingBrief,
     };
   }
 
@@ -143,12 +149,13 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   }
 
   // Flere sessioner af samme slags i samme repo får et nummer, så de kan kendes fra hinanden.
-  function numbered(name, repo, agentId) {
-    const n = [...sessions.values()].filter((x) => x.repo === repo && x.agentId === agentId).length;
+  function numbered(name, repo, agentId, roleId) {
+    const n = [...sessions.values()].filter((x) => x.repo === repo && x.agentId === agentId && (x.role ? x.role.id : null) === (roleId || null)).length;
     return n ? `${name} ${n + 1}` : name;
   }
 
-  function create({ repo, cwd, kind, agent, baseline, initialPaste }) {
+  // role/brief: startes agenten i en rolle, indsættes rollens arbejdsbeskrivelse, så snart agenten er klar.
+  function create({ repo, cwd, kind, agent, baseline, role, brief, initialPaste }) {
     const running = [...sessions.values()].filter((s) => s.exitCode == null).length;
     if (running >= config.maxSessions) {
       const err = new Error(`Der kører allerede ${running} sessioner (maks. ${config.maxSessions}). Stop eller fjern en session først.`);
@@ -165,7 +172,9 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     const s = {
       id: crypto.randomBytes(12).toString('hex'), repo, kind, cwd, baseline: baseline || null,
       agentId: kind === 'agent' ? agent.id : null,
-      name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
+      name: numbered(kind === 'agent' ? (role ? `${role.name} · ${agent.name}` : agent.name) : 'Terminal', repo, kind === 'agent' ? agent.id : null, role ? role.id : null),
+      role: kind === 'agent' && role ? { id: role.id, name: role.name, icon: role.icon, mode: role.mode } : null,
+      pendingBrief: kind === 'agent' && brief ? brief : null, briefTimer: null,
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
       queuedPaste, initialPasteTimer: null,
@@ -181,6 +190,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         s.waitState = null;
       }
       s.buffer += data;
+      // Rollens beskrivelse indsættes først, når agenten har været stille et øjeblik – så er den færdig med at starte op.
+      if (s.pendingBrief) { clearTimeout(s.briefTimer); s.briefTimer = setTimeout(() => deliverBrief(s), BRIEF_QUIET_MS); }
       // Husk om programmet har slået "indsæt-tilstand" til (bruges af paste nedenfor).
       const on = s.buffer.lastIndexOf('\x1b[?2004h');
       const off = s.buffer.lastIndexOf('\x1b[?2004l');
@@ -220,7 +231,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       for (const c of s.clients) c.onData(data);
     });
     proc.onExit(({ exitCode, signal }) => {
-      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.initialPasteTimer);
+      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.briefTimer); clearTimeout(s.briefFallback); clearTimeout(s.initialPasteTimer);
+      s.pendingBrief = null;
       s.approvalTimer = null; s.initialPasteTimer = null; s.queuedPaste = null;
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
@@ -228,6 +240,11 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       if (s.kind === 'agent' && onSessionEvent) onSessionEvent('exit', view(s));
       for (const c of s.clients) c.onExit(s.exitCode);
     });
+    // Siger agenten slet ingenting efter start, indsættes beskrivelsen alligevel efter et stykke tid.
+    if (s.pendingBrief) {
+      s.briefFallback = setTimeout(() => deliverBrief(s), BRIEF_MAX_WAIT_MS);
+      s.briefTimer = setTimeout(() => deliverBrief(s), BRIEF_SILENT_MS);
+    }
     const v = view(s);
     if (s.kind === 'agent' && onSessionEvent) onSessionEvent('start', v);
     return v;
@@ -265,6 +282,15 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       },
       detach() { s.clients.delete(client); },
     };
+  }
+
+  // Rollens beskrivelse indsættes uden Enter, ligesom alt andet: du ser den igennem og sender den selv.
+  function deliverBrief(s) {
+    clearTimeout(s.briefTimer); clearTimeout(s.briefFallback);
+    if (!s.pendingBrief || s.exitCode != null) { s.pendingBrief = null; return; }
+    const text = s.pendingBrief;
+    s.pendingBrief = null;
+    paste(s.id, text, true);
   }
 
   // Indsætter tekst i en kørende AGENT (aldrig en almindelig terminal, hvor linjeskift ville køre teksten som kommandoer).
@@ -344,4 +370,4 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   return { create, get, attach, paste, approve, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
 }
 
-module.exports = { createSessions, lastLine, PASTE_MAX };
+module.exports = { createSessions, lastLine, PASTE_MAX, BRIEF_QUIET_MS };

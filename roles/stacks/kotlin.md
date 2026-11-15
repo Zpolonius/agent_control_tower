@@ -1,0 +1,6 @@
+- Byg og test med Gradle-wrapperen: `./gradlew assembleDebug test` (Windows: `gradlew.bat`). Find modulerne i `settings.gradle(.kts)`.
+- Lint: `./gradlew lint`, og `detekt` eller `ktlint`, hvis de er sat op i projektet.
+- Instrumenterede tests (`connectedAndroidTest`) kræver en emulator – sig det, hvis der ikke er en.
+- Typiske fejl: `!!` på værdier der kan være null, coroutines der ikke afbrydes (`GlobalScope`, manglende `viewModelScope`), arbejde på hovedtråden, livscyklus (rotation, proces-død, gemt tilstand).
+- Android-sikkerhed: `AndroidManifest.xml` – `exported`-komponenter uden tilladelse, `usesCleartextTraffic`, `allowBackup`, deeplinks og intents der ikke valideres, webviews med `addJavascriptInterface`, data i `SharedPreferences` i klartekst, logning med `Log.d` af persondata.
+- Android-UX: `contentDescription` på ikoner, trykflader mindst 48 dp, tekst i `strings.xml` (ikke hårdkodet), mørk tilstand, store skriftstørrelser.

@@ -1,0 +1,7 @@
+- Find scripts i `package.json` (fx `test`, `build`, `lint`, `typecheck`) og brug projektets pakkehåndtering: `package-lock.json` = npm, `pnpm-lock.yaml` = pnpm, `yarn.lock` = yarn.
+- Typetjek uden at bygge: `npx tsc --noEmit`, hvis der er en `tsconfig.json`.
+- Afhængigheder: `npm audit --omit=dev` (eller pnpm/yarn-varianten). Nævn kun sårbarheder i kode der faktisk bruges.
+- Er `node_modules` ikke installeret, og kræver det netværk, så sig det – installér ikke noget globalt.
+- Typiske fejl: `await` der mangler, `==` i stedet for `===`, ubehandlede promise-fejl, `any` der skjuler fejl, datoer uden tidszone.
+- Web-sikkerhed: `innerHTML`/`dangerouslySetInnerHTML`, `eval`, data i URL'er, CORS, cookies uden `HttpOnly`/`SameSite`, hemmeligheder i frontend-kode eller `.env` i git.
+- Web-UX: semantiske elementer (`button`, `label`, `alt`), fokus ved navigation, `prefers-reduced-motion`, fejlbeskeder ved formularer.
