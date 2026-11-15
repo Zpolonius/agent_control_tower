@@ -599,6 +599,45 @@ test('historik afspilles mærket som gammel, og flere sessioner af samme agent f
   await cleanup();
 });
 
+test('roller: start en agent i en rolle – opgaven indsættes når den er klar, men sendes først med Enter', async () => {
+  const list = (await get('/api/roles?repo=alpha')).json;
+  assert.ok(list.roles.some((r) => r.id === 'fejlfinder'), 'den indbyggede fejlfinder findes');
+  assert.ok(Array.isArray(list.stacks) && Array.isArray(list.reports));
+  const a = (await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'fejlfinder', input: 'kig på login' })).json;
+  assert.equal(a.role.id, 'fejlfinder');
+  assert.match(a.name, /^Fejlfinder · Ekko/);
+  assert.equal(a.briefPending, true);
+  const c = await connect(a.id);
+  assert.ok(await until(async () => (await sessionState(a.id)).briefPending === false, 8000), 'opgaven indsættes, når agenten har været stille');
+  assert.equal((await sessionState(a.id)).pendingPaste, true);
+  await sleep(300);
+  assert.ok(!c.out.includes('GOT['), 'intet er sendt før Enter');
+  c.ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+  assert.ok(await until(() => /GOT\[.*kig på login/.test(c.out), 5000), 'opgaven og fokus kom med');
+  assert.ok(/docs\/reports\/\d{4}-\d{2}-\d{2}-fejlfinder\.md/.test(c.out), 'rapportstien er udfyldt');
+  c.ws.close();
+  await cleanup();
+});
+
+test('roller: ugyldige forespørgsler afvises, og browseren kan ikke selv bestemme teksten', async () => {
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'findes-ikke' })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: '../../etc/passwd' })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'shell', roleId: 'fejlfinder' })).status, 400, 'en terminal kan ikke have en rolle');
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'fejlfinder', input: { x: 1 } })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 7 })).status, 400);
+  assert.equal((await get('/api/roles?repo=..')).status, 404);
+  assert.equal((await req('GET', '/api/roles?repo=alpha')).status, 401);
+  assert.equal((await get('/api/reports/file?repo=alpha&name=..%2F..%2Fsecret.env')).status, 404);
+  assert.equal((await req('GET', '/api/reports/file?repo=alpha&name=x.md')).status, 401);
+  assert.equal((await get('/api/state')).json.sessions.filter((x) => x.exitCode == null).length, 0, 'ingen af dem startede noget');
+});
+
+test('roller: en session uden rolle opfører sig som før', async () => {
+  const a = (await post('/api/sessions', { repo: 'beta', kind: 'agent', agentId: 'echo' })).json;
+  assert.deepEqual([a.role, a.briefPending, a.name], [null, false, 'Ekko']);
+  await cleanup();
+});
+
 test('for lang tekst afvises tydeligt i stedet for at blive klippet, og usendt tekst stables ikke', async () => {
   const a = (await post('/api/sessions', { repo: 'beta', kind: 'agent', agentId: 'raw' })).json;
   const c = await connect(a.id);

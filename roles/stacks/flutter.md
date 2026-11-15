@@ -1,0 +1,6 @@
+- Analyse og test: `flutter analyze` og `flutter test`. Format: `dart format --set-exit-if-changed .`
+- Afhængigheder: `flutter pub get` kræver netværk første gang – sig det, hvis de mangler. `flutter pub outdated` viser forældede pakker.
+- Platform-mapper (`android/`, `ios/`, `web/`) har deres egne indstillinger: tjek Android-manifestet og iOS `Info.plist` for tilladelser og netværk i klartekst.
+- Typiske fejl: `setState` efter `dispose`, `BuildContext` brugt efter `await` uden `mounted`-tjek, `!` på værdier der kan være null, futures der ikke afventes, controllers der ikke lukkes.
+- Sikkerhed: nøgler i Dart-koden (de kan læses ud af appen), data i `SharedPreferences` i stedet for sikker lagring, webviews med JavaScript-kanaler, deeplinks der ikke valideres.
+- UX: `Semantics`/`tooltip` på ikonknapper, trykflader mindst 48×48, tekster der klippes ved store skriftstørrelser, tomme og fejl-tilstande i lister.

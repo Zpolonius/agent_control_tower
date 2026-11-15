@@ -68,6 +68,19 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
 
 Når en agent venter eller er færdig, viser dens kort og terminalvisning et resumé: hvor længe den kørte, nye commits, og hvilke filer der er ændret siden start. Filer du selv havde ændret, før agenten startede, markeres. Resuméet bygger kun på git og kalder ingen model, så det viser alt der er ændret i repoet i perioden – også det du selv eller en anden agent har lavet imens. Knappen "Bed om resumé" indsætter et spørgsmål hos agenten, hvis du vil have dens egen forklaring i ord.
 
+## Roller og rapporter
+
+Fanen **Roller** i et repo starter en agent i en fast rolle: Fejlfinder, Security, QA-tester, UI/UX-ekspert, Issue/PO eller Udvikler. Du vælger hver gang, hvilken agent rollen skal køre i (Claude Code, Antigravity eller en anden fra din liste), og kan skrive et fokus eller en opgave med. Rollens arbejdsbeskrivelse indsættes hos agenten, så snart den er klar – du læser den og trykker Enter.
+
+Rollerne er generiske: de finder selv ud af, hvordan repoet bygges og testes. Control Tower gætter teknologien (TypeScript/JavaScript, Kotlin/Android, Flutter/Dart) og giver rollen de tilhørende noter med fra `roles/stacks`.
+
+- **Gennemgangs-rollerne** (Fejlfinder, Security, QA, UI/UX) ændrer ikke din kode. De skriver én rapport i `docs/reports/ÅÅÅÅ-MM-DD-<rolle>.md`.
+- **Rapporter**-fanen viser rapporterne og deler dem op i fund. Hvert fund kan sendes til **Udvikler** (retter, tester, laver en PR og skriver en rapport tilbage) eller til **Issue/PO** (laver issues med acceptkriterie – viser dem først og opretter dem kun efter dit ja).
+- Rollerne ligger som markdown-filer i mappen `roles`. Ret dem som almindelig tekst.
+- **Tillæg pr. repo:** læg en fil i repoet på `.control-tower/roles/<rolle>.md`, fx `security.md`, så kommer dens tekst med, når rollen startes i netop det repo. En fil med et nyt navn og egen frontmatter (`name`, `icon`, `description`) bliver en ny rolle, der kun findes i det repo.
+
+At en rolle "ikke ændrer kode" er en instruks til agenten, ikke noget Control Tower kan håndhæve. Tjek resuméet efter kørslen.
+
 ## Issues
 
 Fanen Issues viser repoets åbne GitHub-issues (via `gh`). Åbn et issue, og send det til en kørende agent. Har repoet en skill til issues, kan du vælge den – så sendes kun `/skill-navn nummer`, og agenten henter selv issuet. Uden skill sendes titel og beskrivelse. Valget huskes pr. repo i din browser. Control Tower ændrer ikke noget på GitHub.

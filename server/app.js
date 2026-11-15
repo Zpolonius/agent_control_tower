@@ -11,6 +11,7 @@ const { createGithub } = require('./github');
 const { createSkills } = require('./skills');
 const { createTokens } = require('./tokens');
 const summary = require('./summary');
+const { createRoles } = require('./roles');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MODULES = path.join(__dirname, '..', 'node_modules');
@@ -39,6 +40,7 @@ function createApp({ config, token }) {
   });
   const github = createGithub();
   const skills = createSkills(config);
+  const roles = createRoles();
   const headers = sec.securityHeaders(port);
 
   function send(res, code, body, type) {
@@ -136,6 +138,19 @@ function createApp({ config, token }) {
       return file ? send(res, 200, file) : fail(res, 404, 'Skillen findes ikke');
     }
 
+    if (req.method === 'GET' && route === '/api/roles') {
+      const dir = scanner.resolve(url.searchParams.get('repo'));
+      if (!dir) return fail(res, 404, 'Ukendt repo');
+      return send(res, 200, { roles: roles.list(dir), stacks: roles.detectStacks(dir), reports: roles.reports(dir) });
+    }
+
+    if (req.method === 'GET' && route === '/api/reports/file') {
+      const dir = scanner.resolve(url.searchParams.get('repo'));
+      if (!dir) return fail(res, 404, 'Ukendt repo');
+      const file = roles.readReport(dir, url.searchParams.get('name'));
+      return file ? send(res, 200, file) : fail(res, 404, 'Rapporten findes ikke');
+    }
+
     if (req.method === 'GET' && route === '/api/prs') {
       const repo = url.searchParams.get('repo');
       const dir = scanner.resolve(repo);
@@ -192,10 +207,18 @@ function createApp({ config, token }) {
         agent = config.agents.find((a) => a.id === body.agentId);
         if (!agent) return fail(res, 400, 'Ukendt agent');
       } else if (body.kind !== 'shell') return fail(res, 400, 'Ukendt sessionstype');
+      // En rolle slås op på dens id. Selve teksten bygges her på serveren ud fra rollefilerne – browseren sender den ikke.
+      let built = null;
+      if (body.roleId != null) {
+        if (body.kind !== 'agent' || typeof body.roleId !== 'string') return fail(res, 400, 'En rolle kræver en agent');
+        if (body.input != null && typeof body.input !== 'string') return fail(res, 400, 'Ugyldig tekst til rollen');
+        built = roles.build(cwd, body.repo, body.roleId, body.input || '');
+        if (!built) return fail(res, 400, 'Ukendt rolle');
+      }
       try {
         // For agenter huskes repoets tilstand ved start, så der kan vises et resumé bagefter.
         const baseline = body.kind === 'agent' ? await summary.baseline(cwd) : null;
-        return send(res, 201, sessions.create({ repo: body.repo, cwd, kind: body.kind, agent, baseline }));
+        return send(res, 201, sessions.create({ repo: body.repo, cwd, kind: body.kind, agent, baseline, role: built && built.role, brief: built && built.text }));
       } catch (err) {
         return fail(res, err.code === 'LIMIT' ? 429 : 500, err.code === 'LIMIT' ? err.message : 'Terminalen kunne ikke startes');
       }
