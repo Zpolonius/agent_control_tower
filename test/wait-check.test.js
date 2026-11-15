@@ -8,7 +8,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
-const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, isTaskDone, sanitizeDetail } = require('../server/wait-check');
+const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
 const { createSessions } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
@@ -492,6 +492,111 @@ test('API /api/state: returnerer afventer + waitingFor for stille agent med e2e-
     assert.equal(found.waitingFor, 'e2e-tests');
     assert.match(found.waitingDetail, /Playwright/i);
     assert.ok(!('waitState' in found) && !('cwd' in found));
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inspectQuota & createWaitChecker: genkender quota reached og bevarer Resets-detalje', async () => {
+  const quotaWithTime = [
+    '● Working on task…',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h 15m',
+    '❯ ',
+    '? for shortcuts',
+  ].join('\r\n');
+  const q1 = inspectQuota(quotaWithTime);
+  assert.ok(q1);
+  assert.equal(q1.waitingFor, 'quota reset');
+  assert.match(q1.detail, /Individual quota reached/i);
+  assert.match(q1.detail, /Resets in 2h 15m/i);
+  assert.equal(inspectBuffer(quotaWithTime), null);
+  assert.equal(isTaskDone(quotaWithTime, { hadInput: true }), false);
+
+  const quotaBareReset = 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets\r\n❯ ';
+  const q2 = inspectQuota(quotaBareReset);
+  assert.ok(q2);
+  assert.equal(q2.waitingFor, 'quota reset');
+  assert.match(q2.detail, /Individual quota reached/i);
+  assert.match(q2.detail, /Resets/i);
+
+  const quotaTwoLine = [
+    'Individual quota reached. Please upgrade your subscription to increase your limits.',
+    'Resets at 8:00pm (Europe/Copenhagen)',
+    '❯ ',
+  ].join('\r\n');
+  const q3 = inspectQuota(quotaTwoLine);
+  assert.ok(q3);
+  assert.match(q3.detail, /Resets at 8:00pm/i);
+
+  // createWaitChecker: quota reached vinder over kørende baggrundsproces
+  const procs = [
+    { pid: 100, ppid: 1, name: 'powershell.exe', cmd: 'powershell.exe -NoLogo -Command "claude"' },
+    { pid: 102, ppid: 100, name: 'claude.exe', cmd: 'claude.exe' },
+    { pid: 200, ppid: 102, name: 'node.exe', cmd: 'node.exe server.js' },
+  ];
+  const checker = createWaitChecker({ query: async () => procs });
+  const s = { proc: { pid: 100 }, buffer: quotaWithTime, waitState: { waitingFor: 'kommando', source: 'process' } };
+  await checker.checkAll([s]);
+  assert.equal(s.waitState, null);
+  assert.equal(checker.checkSync(s), null);
+});
+
+test('API /api/state: returnerer status kvote når agent rammer Individual quota reached', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-wait-quota-api-'));
+  const repo = path.join(dir, 'demo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  const token = 'd'.repeat(64);
+  const config = cfg.clean({
+    root: dir,
+    port: 4319,
+    idleSeconds: 4,
+    maxSessions: 2,
+    agents: [{
+      id: 'quota-agent',
+      name: 'QuotaAgent',
+      command: 'node -e "console.log(\'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h 30m\\n❯ \'); setInterval(()=>{}, 1000)"',
+    }],
+  });
+  const app = createApp({ config, token });
+  const dispatch = (method, url, body) => new Promise((resolve) => {
+    const req = new EventEmitter();
+    req.method = method;
+    req.url = url;
+    req.headers = {
+      host: '127.0.0.1:4319',
+      authorization: `Bearer ${token}`,
+      origin: 'http://127.0.0.1:4319',
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    };
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      writeHead(code) { this.statusCode = code; this.headersSent = true; },
+      end(chunk) { resolve({ status: this.statusCode, json: JSON.parse(String(chunk || '{}')) }); },
+    };
+    app.server.emit('request', req, res);
+    if (body) req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+
+  try {
+    const created = await dispatch('POST', '/api/sessions', { repo: 'demo', kind: 'agent', agentId: 'quota-agent' });
+    assert.equal(created.status, 201);
+    const id = created.json.id;
+    let found = null;
+    const end = Date.now() + 6000;
+    while (Date.now() < end) {
+      const st = await dispatch('GET', '/api/state');
+      found = st.json.sessions.find((s) => s.id === id);
+      if (found && found.status === 'kvote') break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    assert.equal(found.status, 'kvote');
+    assert.equal(found.waitingFor, 'quota reset');
+    assert.match(found.waitingDetail, /Individual quota reached/i);
+    assert.match(found.waitingDetail, /Resets in 1h 30m/i);
   } finally {
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });

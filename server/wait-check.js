@@ -32,6 +32,8 @@ const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|al
 const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
+const QUOTA_RE = /\b(individual quota reached|please upgrade your subscription to increase your limits|quota (?:reached|exceeded|exhausted|used)|(?:usage|session|rate|plan|5-hour|weekly|daily) limit (?:reached|exceeded)|you(?:'ve| have) (?:hit|reached) your (?:usage )?limit|kvote(?:n er)? (?:nået|opbrugt|brugt))\b/i;
+const QUOTA_RESET_RE = /\b(resets?(?:\s+(?:in|at|on)\b)?[^.\r\n]{0,60}|nulstilles\b[^.\r\n]{0,60})/i;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
 const INTERRUPTED_RE = /\b(request interrupted|interrupted by user|aborted|cancelled|canceled)\b/i;
@@ -300,6 +302,45 @@ function hasApprovalPrompt(buffer) {
   return findActivePromptIndex(turnLines) !== -1;
 }
 
+function findActiveQuotaIndex(turnLines) {
+  const minIdx = Math.max(0, turnLines.length - 11);
+  for (let i = turnLines.length - 1; i >= minIdx; i -= 1) {
+    if (!QUOTA_RE.test(turnLines[i])) continue;
+    const after = turnLines.slice(i + 1);
+    const superseded = after.some((l) => (isSpinnerLine(l) && !BG_SPINNER_RE.test(l)) || COMPLETION_RE.test(l));
+    return superseded ? -1 : i;
+  }
+  return -1;
+}
+
+function inspectQuota(buffer) {
+  const { turnLines } = splitTurnLines(buffer);
+  const idx = findActiveQuotaIndex(turnLines);
+  if (idx === -1) return null;
+  const line = turnLines[idx];
+  const windowLines = turnLines
+    .slice(idx, Math.min(turnLines.length, idx + 3))
+    .filter((l) => !BARE_PROMPT_RE.test(l));
+  const selfReset = line.match(QUOTA_RESET_RE);
+  const nextReset = !selfReset ? windowLines.slice(1).join(' ').match(QUOTA_RESET_RE) : null;
+  const resetInfo = (selfReset ? selfReset[1] : nextReset ? nextReset[1] : '').trim();
+  let rawDetail = line;
+  if (resetInfo) {
+    const candidate = selfReset ? line : `${line} · ${resetInfo}`;
+    if (candidate.length > 80) {
+      const head = /individual quota reached/i.test(line) ? 'Individual quota reached' : 'Quota reached';
+      rawDetail = `${head} · ${resetInfo}`;
+    } else {
+      rawDetail = candidate;
+    }
+  }
+  return {
+    waitingFor: 'quota reset',
+    resetText: resetInfo || null,
+    detail: sanitizeDetail(rawDetail) || 'Quota used – waiting for reset',
+  };
+}
+
 function inspectBuffer(buffer) {
   const { turnLines } = splitTurnLines(buffer);
   if (!turnLines.length) return null;
@@ -308,8 +349,8 @@ function inspectBuffer(buffer) {
   const hasInterrupt = turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l));
   const hasSpinner = recentBottom.some(isSpinnerLine);
 
-  // Eksplicitte godkendelses-/bruger-prompts vinder altid – også når baggrundsopgaver kører.
-  if (findActivePromptIndex(turnLines) !== -1) {
+  // Eksplicitte godkendelses-/bruger-prompts og kvote-stop vinder altid – også når baggrundsopgaver kører.
+  if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) {
     return null;
   }
 
@@ -354,7 +395,7 @@ function isTaskDone(buffer, { hadInput = false } = {}) {
   const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer);
   if (!lines.length) return false;
 
-  if (findActivePromptIndex(turnLines) !== -1) return false;
+  if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) return false;
   if (turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l))) return false;
   if (turnLines.slice(-6).some(isSpinnerLine)) return false;
 
@@ -402,7 +443,7 @@ function createWaitChecker({ query = queryProcesses } = {}) {
     if (!idleSessions.length) return;
     const procs = await snapshot();
     for (const s of idleSessions) {
-      if (hasApprovalPrompt(s.buffer)) {
+      if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) {
         s.waitState = null;
         continue;
       }
@@ -413,7 +454,7 @@ function createWaitChecker({ query = queryProcesses } = {}) {
   }
 
   function checkSync(s) {
-    if (hasApprovalPrompt(s.buffer)) return null;
+    if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) return null;
     return s.waitState || inspectBuffer(s.buffer);
   }
 
@@ -425,6 +466,7 @@ module.exports = {
   inspectProcessTree,
   inspectBuffer,
   hasApprovalPrompt,
+  inspectQuota,
   isTaskDone,
   sanitizeDetail,
 };

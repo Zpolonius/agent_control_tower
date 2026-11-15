@@ -4,7 +4,7 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
-const { createWaitChecker, hasApprovalPrompt, isTaskDone } = require('./wait-check');
+const { createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone } = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -72,10 +72,34 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
     return Date.now() - s.approvalSince >= settleMs;
   }
 
+  function updateQuotaState(s) {
+    if (s.exitCode != null || s.kind !== 'agent') {
+      s.quotaSince = null;
+      return null;
+    }
+    const now = Date.now();
+    const q = now >= s.approvalCooldownUntil ? inspectQuota(s.buffer) : null;
+    if (!q) {
+      s.quotaSince = null;
+      return null;
+    }
+    if (!s.quotaSince) s.quotaSince = now;
+    return q;
+  }
+
+  function activeQuota(s) {
+    const q = updateQuotaState(s);
+    if (!q) return null;
+    if (isIdleAgent(s)) return q;
+    const settleMs = Math.min(1500, Math.max(200, config.idleSeconds * 500));
+    return Date.now() - s.quotaSince >= settleMs ? q : null;
+  }
+
   function status(s) {
     if (s.exitCode != null) return s.exitCode === 0 || s.killed ? 'afsluttet' : 'fejlet';
     if (s.kind === 'shell') return 'aaben';
     if (needsApproval(s)) return 'venter';
+    if (activeQuota(s)) return 'kvote';
     if (!isIdleAgent(s)) return 'arbejder';
     if (currentWait(s)) return 'afventer';
     return isTaskDone(s.buffer, { hadInput: s.hadUserInput }) ? 'faerdig' : 'venter';
@@ -84,21 +108,25 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
   function view(s) {
     const st = status(s);
     const approval = st === 'venter' && s.approvalSince != null;
+    const quota = st === 'kvote' ? inspectQuota(s.buffer) : null;
     const wait = st === 'afventer' ? currentWait(s) : null;
     return {
       id: s.id, repo: s.repo, kind: s.kind, agentId: s.agentId, name: s.name,
       startedAt: s.startedAt, lastOutputAt: s.lastOutputAt, endedAt: s.endedAt,
       exitCode: s.exitCode, status: st,
       needsApproval: approval,
-      waitingFor: wait ? wait.waitingFor : null,
-      waitingDetail: wait ? wait.detail : null,
+      waitingFor: quota ? quota.waitingFor : (wait ? wait.waitingFor : null),
+      waitingDetail: quota ? quota.detail : (wait ? wait.detail : null),
       lastLine: s.kind === 'agent' ? lastLine(s.buffer, s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
       pendingPaste: s.pendingPaste,
     };
   }
 
   async function refreshWaits() {
-    for (const s of sessions.values()) updateApprovalState(s);
+    for (const s of sessions.values()) {
+      updateApprovalState(s);
+      updateQuotaState(s);
+    }
     const idle = [...sessions.values()].filter(isIdleAgent);
     if (idle.length) await waitChecker.checkAll(idle);
   }
@@ -128,7 +156,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
       name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
-      approvalSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
+      approvalSince: null, quotaSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
     };
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
@@ -153,6 +181,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
         s.approvalTimer = setTimeout(() => {
           s.approvalTimer = null;
           updateApprovalState(s);
+          updateQuotaState(s);
         }, 350);
         s.approvalTimer.unref();
       }
@@ -190,6 +219,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
         if (/[\r\n\x03\x15]/.test(data)) s.pendingPaste = false;
         if (s.kind === 'agent' && /[\r\n\x03\x1b yYnN1-9]/.test(data)) {
           s.approvalSince = null;
+          s.quotaSince = null;
           s.approvalCooldownUntil = Date.now() + 600;
         }
         s.proc.write(data);

@@ -25,6 +25,7 @@
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
     afventer: { label: 'Venter på andet', cls: 'extwait', glyph: '◷' },
+    kvote: { label: 'Quota used – waiting for reset', cls: 'quota', glyph: '◴' },
     venter: { label: 'Venter på dig', cls: 'wait', glyph: '◐' },
     faerdig: { label: 'Færdig', cls: 'ready', glyph: '✓' },
     aaben: { label: 'Åben', cls: 'open', glyph: '▪' },
@@ -40,7 +41,8 @@
     const s = STATUS[status] || STATUS.afsluttet;
     const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}`
       : status === 'venter' && needsApproval ? 'Mangler godkendelse' : s.label;
-    return h('span', { class: `badge ${s.cls}`, title: status === 'afventer' && waitingDetail ? waitingDetail : null },
+    const tip = (status === 'afventer' || status === 'kvote') && waitingDetail ? waitingDetail : null;
+    return h('span', { class: `badge ${s.cls}`, title: tip },
       h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), label);
   }
   const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail, s.needsApproval);
@@ -55,7 +57,7 @@
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
   function robot(status, mini) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
-    const mark = { wait: '?', extwait: '…', ready: '✓', fail: '!', done: 'z' }[st];
+    const mark = { wait: '?', extwait: '…', quota: '◴', ready: '✓', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
       sv('rect', { class: 'desk', x: 8, y: 70, width: 104, height: 5, rx: 2.5 }),
       sv('rect', { class: 'lapbase', x: 62, y: 67, width: 40, height: 3, rx: 1.5 }),
@@ -84,16 +86,18 @@
   function timeText(s) {
     if (s.endedAt) return `sluttede ${ago(s.endedAt)}`;
     if (s.status === 'faerdig') return `blev færdig ${ago(s.lastOutputAt)}`;
+    if (s.status === 'kvote') return `venter på reset (${dur(s.lastOutputAt)})`;
     if (s.status === 'venter' || s.status === 'afventer') return `har ventet i ${dur(s.lastOutputAt)}`;
     return `har arbejdet i ${dur(s.startedAt)}`;
   }
   function bubbleText(s) {
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
+    if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
-    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
+    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', kvote: 'Quota used – waiting for reset', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -125,7 +129,7 @@
   function summaryBody(s, r) {
     if (!r) return [h('p', { class: 'empty', text: 'Henter resumé…' })];
     if (!r.available) return [h('p', { class: 'empty', text: r.reason })];
-    const end = r.endedAt || (s.status === 'venter' || s.status === 'faerdig' ? r.lastOutputAt : Date.now());
+    const end = r.endedAt || (s.status === 'venter' || s.status === 'faerdig' || s.status === 'kvote' ? r.lastOutputAt : Date.now());
     const mins = Math.max(1, Math.round((end - r.startedAt) / 60000));
     const head = !r.fileCount && !r.commits.length
       ? `Agenten har kørt i ${mins} min. Der er ingen ændringer i repoet, siden den startede.`
@@ -147,12 +151,12 @@
     return out;
   }
 
-  const ORDER = { venter: 0, fejlet: 1, faerdig: 2, afventer: 3, arbejder: 4, afsluttet: 5 };
+  const ORDER = { venter: 0, fejlet: 1, kvote: 2, faerdig: 3, afventer: 4, arbejder: 5, afsluttet: 6 };
   const agentsIn = (list) => list.filter((s) => s.kind === 'agent').sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.startedAt - a.startedAt);
 
   function deskCard(s, withRepo) {
     const st = STATUS[s.status] || STATUS.afsluttet;
-    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status),
       h('div', { class: 'deskinfo' },
@@ -252,12 +256,14 @@
     if (!state.data) return;
     const w = state.data.sessions.filter((s) => s.status === 'venter').length;
     const f = state.data.sessions.filter((s) => s.status === 'fejlet').length;
+    const q = state.data.sessions.filter((s) => s.status === 'kvote').length;
     const r = state.data.sessions.filter((s) => s.status === 'faerdig').length;
-    const key = `${w}/${f}/${r}`;
-    if (state.announced !== undefined && key !== state.announced && (w || f || r)) {
+    const key = `${w}/${f}/${q}/${r}`;
+    if (state.announced !== undefined && key !== state.announced && (w || f || q || r)) {
       $('announce').textContent = [
         w ? plural(w, 'agent venter på dig', 'agenter venter på dig') : '',
         f ? plural(f, 'agent er stoppet med en fejl', 'agenter er stoppet med en fejl') : '',
+        q ? plural(q, 'agent har brugt kvoten og venter på reset', 'agenter har brugt kvoten og venter på reset') : '',
         r ? plural(r, 'agent er færdig', 'agenter er færdige') : '',
       ].filter(Boolean).join(', ');
     }
@@ -271,6 +277,11 @@
       '{a} mangler din godkendelse i {r}.',
       '{a} vil gerne have lov til at fortsætte i {r}.',
       '{a} venter på et ja eller nej fra dig i {r}.',
+    ],
+    kvote: [
+      '{a} i {r}: Quota used – waiting for reset.',
+      '{a} har brugt sin kvote i {r} og venter på reset.',
+      '{a} i {r} har ramt kvotegrænsen – venter på reset.',
     ],
     venter: [
       '{a} har rakt hånden op i {r}.',
@@ -299,6 +310,8 @@
     ],
     titleWait: ['Hallo? En agent venter', 'Nogen rækker hånden op', 'Du bliver savnet', 'Agenten tripper'],
     titleWaitMany: ['agenter venter – de er begyndt at snakke om dig', 'agenter står i kø', 'agenter tripper'],
+    titleQuota: ['Quota used – waiting for reset'],
+    titleQuotaMany: ['agenter venter på quota reset'],
     titleReady: ['En agent er færdig', 'Opgave løst – klar til tjek'],
     titleReadyMany: ['agenter er færdige – klar til tjek'],
     titleFail: ['En agent ligger ned', 'Der røg en agent', 'Agent nede – send kaffe'],
@@ -315,6 +328,7 @@
     const agents = sessions.filter((s) => s.kind === 'agent');
     const w = agents.filter((s) => s.status === 'venter');
     const f = agents.filter((s) => s.status === 'fejlet');
+    const q = agents.filter((s) => s.status === 'kvote');
     const rdy = agents.filter((s) => s.status === 'faerdig');
     const k = agents.filter((s) => s.status === 'arbejder');
     const ew = agents.filter((s) => s.status === 'afventer');
@@ -322,6 +336,8 @@
     if (w.length === 1) text = `(1) ${pickStable(FUN.titleWait, w[0].id)}`;
     else if (w.length > 1) text = `(${w.length}) ${w.length} ${pickStable(FUN.titleWaitMany, w[0].id)}`;
     else if (f.length) text = `(!) ${pickStable(FUN.titleFail, f[0].id)}`;
+    else if (q.length === 1) text = `(◴) ${pickStable(FUN.titleQuota, q[0].id)}`;
+    else if (q.length > 1) text = `(◴ ${q.length}) ${q.length} ${pickStable(FUN.titleQuotaMany, q[0].id)}`;
     else if (rdy.length === 1) text = `(✓) ${pickStable(FUN.titleReady, rdy[0].id)}`;
     else if (rdy.length > 1) text = `(✓ ${rdy.length}) ${rdy.length} ${pickStable(FUN.titleReadyMany, rdy[0].id)}`;
     else if (k.length) text = `${k.length} ${pickStable(k.length === 1 ? FUN.titleWork : FUN.titleWorkMany, k[0].id)}`;
@@ -351,7 +367,7 @@
     try {
       audio = audio || new (window.AudioContext || window.webkitAudioContext)();
       // To korte toner: opad når nogen venter eller er færdig, nedad når noget er gået galt.
-      const notes = kind === 'fejlet' ? [440, 311] : [587, 784];
+      const notes = kind === 'fejlet' || kind === 'kvote' ? [440, 311] : [587, 784];
       notes.forEach((freq, i) => {
         const osc = audio.createOscillator();
         const gain = audio.createGain();
@@ -368,7 +384,9 @@
 
   function notify(s, kind) {
     const msgKey = kind === 'venter' && s.needsApproval ? 'godkendelse' : kind;
-    const text = fill(pickRandom(FUN[msgKey]), s);
+    const text = kind === 'kvote' && s.waitingDetail
+      ? `${s.name} i ${s.repo}: ${s.waitingDetail}`
+      : fill(pickRandom(FUN[msgKey]), s);
     ding(kind);
     // Ser du allerede på netop den agent, er en besked bare støj.
     const watching = !document.hidden && state.repo === s.repo && state.view === `term:${s.id}`;
@@ -376,13 +394,14 @@
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
         const title = kind === 'fejlet' ? 'En agent er gået ned'
+          : kind === 'kvote' ? 'Quota used – waiting for reset'
           : kind === 'venter' ? (s.needsApproval ? 'En agent mangler godkendelse' : 'En agent venter på dig')
           : 'En agent er færdig';
         const n = new Notification(title, { body: text, tag: `ct-${s.id}` });
         n.onclick = () => { window.focus(); go(s.repo, `term:${s.id}`); n.close(); };
       } catch { /* nogle browsere tillader kun beskeder via en baggrundstjeneste */ }
     }
-    if (!document.hidden) toast(text, kind === 'fejlet');
+    if (!document.hidden) toast(text, kind === 'fejlet' || kind === 'kvote');
   }
 
   // Finder agenter der lige har skiftet tilstand. Det der allerede stod sådan, da siden blev åbnet, giver ingen besked.
@@ -401,6 +420,7 @@
       const becameApproval = s.status === 'venter' && !!s.needsApproval && !prevApproval[s.id];
       if (!prev || (prev[s.id] === s.status && !becameApproval)) continue;
       if (s.status === 'venter') notify(s, 'venter');
+      else if (s.status === 'kvote') notify(s, 'kvote');
       else if (s.status === 'faerdig' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'faerdig');
       else if (s.status === 'fejlet') notify(s, 'fejlet');
       else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id) && prev[s.id] !== 'faerdig') notify(s, 'afsluttet');
@@ -470,6 +490,7 @@
     $('root').title = d.root;
     const working = d.sessions.filter((s) => s.status === 'arbejder').length;
     const extWaiting = d.sessions.filter((s) => s.status === 'afventer').length;
+    const quota = d.sessions.filter((s) => s.status === 'kvote').length;
     const waiting = d.sessions.filter((s) => s.status === 'venter').length;
     const ready = d.sessions.filter((s) => s.status === 'faerdig').length;
     const dirty = d.repos.filter((r) => r.changed + r.untracked > 0).length;
@@ -479,6 +500,7 @@
       h('li', {}, h('strong', { text: String(dirty) }), ' med ændringer'),
       h('li', { class: working ? 'work' : '' }, h('strong', { text: String(working) }), ' arbejder'),
       extWaiting ? h('li', { class: 'extwait' }, h('strong', { text: String(extWaiting) }), ' venter på andet') : null,
+      quota ? h('li', { class: 'quota' }, h('strong', { text: String(quota) }), ' quota used – waiting for reset') : null,
       h('li', { class: waiting ? 'wait' : '' }, h('strong', { text: String(waiting) }), ' venter på dig'),
       ready ? h('li', { class: 'ready' }, h('strong', { text: String(ready) }), ready === 1 ? ' færdig' : ' færdige') : null,
     ].filter(Boolean));
@@ -625,6 +647,7 @@
     const first = state.data.agents[0];
     const waiting = agents.filter((s) => s.status === 'venter');
     const failed = agents.filter((s) => s.status === 'fejlet');
+    const quota = agents.filter((s) => s.status === 'kvote');
     const ready = agents.filter((s) => s.status === 'faerdig');
     const working = agents.filter((s) => s.status === 'arbejder');
     const extWaiting = agents.filter((s) => s.status === 'afventer');
@@ -640,6 +663,12 @@
         h('p', { class: 'nexttitle', text: failed.length === 1 ? 'En agent stoppede med en fejl' : `${failed.length} agenter stoppede med en fejl` }),
         h('p', { class: 'nextsub', text: `${failed[0].name} i ${failed[0].repo}.` })),
       jump(failed[0], 'Se fejlen'));
+    }
+    if (quota.length) {
+      return h('div', { class: 'next quota' }, h('div', {},
+        h('p', { class: 'nexttitle', text: quota.length === 1 ? 'Quota used – waiting for reset' : `${quota.length} agenter: Quota used – waiting for reset` }),
+        h('p', { class: 'nextsub', text: `${quota[0].name} i ${quota[0].repo}${quota[0].waitingDetail ? ` – ${quota[0].waitingDetail}` : ''}.` })),
+      jump(quota[0], 'Se status', false));
     }
     if (ready.length) {
       return h('div', { class: 'next ready' }, h('div', {},
