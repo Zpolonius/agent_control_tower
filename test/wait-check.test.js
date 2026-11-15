@@ -150,6 +150,19 @@ test('inspectBuffer: skelner mellem aktiv venten og bruger-prompts', () => {
     '? for shortcuts · esc to interrupt',
   ].join('\r\n');
   assert.equal(inspectBuffer(claudeSilentWork).waitingFor, 'baggrundsopgave');
+
+  // Gammel spinner / esc to interrupt fra forrige redraw må ikke overtrumfe ny afsluttet tur
+  const claudeStaleInterruptBeforeDone = [
+    '✻ Churning…',
+    '  ▸▸ auto mode on (shift+tab to cycle) · esc to interrupt',
+    '● PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71',
+    '✻ Churned for 25s · done 4:33 PM',
+    '──────────────────────────',
+    '❯ ',
+    '──────────────────────────',
+    '  ▸▸ auto mode on (shift+tab to cycle) · PR #71',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(claudeStaleInterruptBeforeDone), null);
 });
 
 test('sanitizeDetail: skjuler tokens og hemmeligheder', () => {

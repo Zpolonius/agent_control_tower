@@ -242,8 +242,19 @@ function inspectBuffer(buffer) {
   const lines = cleanLines(buffer).slice(-14);
   if (!lines.length) return null;
 
-  const recentBottom = lines.slice(-6);
-  const hasInterrupt = lines.slice(-10).some((l) => INTERRUPT_RE.test(l));
+  // Ignorer gamle spinner- og interrupt-linjer fra før sidste afsluttede Claude Code-tur.
+  let turnStart = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (isTurnDone(lines[i])) {
+      turnStart = i + 1;
+      break;
+    }
+  }
+  const turnLines = lines.slice(turnStart);
+  if (!turnLines.length) return null;
+
+  const recentBottom = turnLines.slice(-6);
+  const hasInterrupt = turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l));
   const hasSpinner = recentBottom.some(isSpinnerLine);
 
   // Eksplicitte godkendelses-/bruger-prompts vinder altid.
@@ -253,16 +264,16 @@ function inspectBuffer(buffer) {
 
   // Uden aktiv spinner eller interrupt-linje betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
   if (!hasInterrupt && !hasSpinner) {
-    const lastBottom = lines.slice(-4);
+    const lastBottom = turnLines.slice(-4);
     const looksLikeQuestion = (l) => /\?\s*$/.test(l) && !/https?:\/\/\S*\?/.test(l);
     if (lastBottom.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;
   }
 
   // Læs nedefra og op; stop hvis vi rammer en afslutningslinje (så gamle testkørsler højere oppe ikke tæller).
   const activeTail = [];
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const l = lines[i];
-    if (COMPLETION_RE.test(l) || isTurnDone(l)) break;
+  for (let i = turnLines.length - 1; i >= 0; i -= 1) {
+    const l = turnLines[i];
+    if (COMPLETION_RE.test(l)) break;
     activeTail.push(l);
   }
   if (!activeTail.length) return null;
