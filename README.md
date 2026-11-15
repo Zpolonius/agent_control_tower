@@ -68,7 +68,8 @@ Knapperne "Beskeder" og "Lyd" øverst er slået fra, indtil du selv slår dem ti
 |---|---|
 | Arbejder | Agenten skriver til terminalen lige nu |
 | Venter på xxxx | Ingen ny tekst i `idleSeconds` sekunder, men der kører subagenter, tests, emulator, build m.m. |
-| Venter på dig | Ingen aktivitet i `idleSeconds` sekunder og ingen aktive underopgaver – den venter sandsynligvis på svar |
+| Venter på dig | Ingen aktivitet i `idleSeconds` sekunder og ingen aktive underopgaver – den venter på svar eller godkendelse |
+| Færdig | Agenten er stadig åben ved prompten, men har afsluttet opgaven uden spørgsmål |
 | Åben | En almindelig terminal |
 | Afsluttet / Fejlet | Sessionen er slut (fejlet = sluttede med en fejlkode) |
 

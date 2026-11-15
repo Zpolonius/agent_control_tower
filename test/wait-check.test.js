@@ -8,7 +8,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
-const { createWaitChecker, inspectProcessTree, inspectBuffer, sanitizeDetail } = require('../server/wait-check');
+const { createWaitChecker, inspectProcessTree, inspectBuffer, isTaskDone, sanitizeDetail } = require('../server/wait-check');
 const { createSessions } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
@@ -165,6 +165,39 @@ test('inspectBuffer: skelner mellem aktiv venten og bruger-prompts', () => {
   assert.equal(inspectBuffer(claudeStaleInterruptBeforeDone), null);
 });
 
+test('isTaskDone: skelner mellem helt færdig opgave og svar/afventer bruger', () => {
+  const finishedPlanWithQuestion = [
+    'Skal jeg gå i gang, eller vil du hellere have en bekræftelsesdialog ("Erstat Lasagne?")?',
+    '✻ Sautéed for 45s · done 4:19 PM',
+    '❯ ',
+  ].join('\r\n');
+  assert.equal(isTaskDone(finishedPlanWithQuestion), false);
+
+  const commitQuestion = [
+    'Skal jeg committe og åbne en PR mod main?',
+    '✻ Cogitated for 10m 54s · done 4:32 PM',
+    '❯ ',
+  ].join('\r\n');
+  assert.equal(isTaskDone(commitQuestion, { hadInput: true }), false);
+
+  const prDone = [
+    '● PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71',
+    'Den indeholder ét commit på claude/issue-44.',
+    '✻ Churned for 25s · done 4:33 PM',
+    '──────────────────────────',
+    '❯ ',
+    '  ▸▸ auto mode on (shift+tab to cycle) · PR #71',
+  ].join('\r\n');
+  assert.equal(isTaskDone(prDone), true);
+  assert.equal(isTaskDone(prDone, { hadInput: true }), true);
+
+  assert.equal(isTaskDone('Welcome to Claude Code\r\n❯ ', { hadInput: false }), false);
+  assert.equal(isTaskDone('Opgaven er løst.\r\n> ', { hadInput: false }), false);
+  assert.equal(isTaskDone('Opgaven er løst.\r\n> ', { hadInput: true }), true);
+  assert.equal(isTaskDone('Request interrupted by user\r\n❯ ', { hadInput: true }), false);
+  assert.equal(isTaskDone('Running tests...\r\nAll tests passed.\r\n❯ '), true);
+});
+
 test('sanitizeDetail: skjuler tokens og hemmeligheder', () => {
   const s = sanitizeDetail('API_KEY=abc123 python run.py --token=xyz999');
   assert.doesNotMatch(s, /abc123|xyz999/);
@@ -197,6 +230,12 @@ test('sessions integration: skifter til afventer ved aktiv venten og venter ved 
     kind: 'agent',
     agent: { id: 'ask', name: 'Ask', command: 'node -e "console.log(\'Hvad skal jeg gøre?\'); setInterval(()=>{}, 1000)"' },
   });
+  const done = ss.create({
+    repo: 'test',
+    cwd: os.tmpdir(),
+    kind: 'agent',
+    agent: { id: 'done', name: 'Done', command: 'node -e "console.log(\'PR oprettet.\\n✻ Churned for 25s · done 4:33 PM\\n❯ \'); setInterval(()=>{}, 1000)"' },
+  });
 
   try {
     const end = Date.now() + 5000;
@@ -206,15 +245,19 @@ test('sessions integration: skifter til afventer ved aktiv venten og venter ved 
       list = ss.list();
       const e = list.find((x) => x.id === emu.id);
       const a = list.find((x) => x.id === ask.id);
-      if (e.status === 'afventer' && a.status === 'venter') break;
+      const d = list.find((x) => x.id === done.id);
+      if (e.status === 'afventer' && a.status === 'venter' && d.status === 'faerdig') break;
       await new Promise((r) => setTimeout(r, 100));
     }
     const eView = list.find((x) => x.id === emu.id);
     const aView = list.find((x) => x.id === ask.id);
+    const dView = list.find((x) => x.id === done.id);
     assert.equal(eView.status, 'afventer');
     assert.equal(eView.waitingFor, 'emulator');
     assert.equal(aView.status, 'venter');
     assert.equal(aView.waitingFor, null);
+    assert.equal(dView.status, 'faerdig');
+    assert.equal(dView.waitingFor, null);
   } finally {
     ss.forceAll();
     await new Promise((r) => setTimeout(r, 200));

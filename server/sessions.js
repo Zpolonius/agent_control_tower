@@ -4,7 +4,7 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
-const { createWaitChecker } = require('./wait-check');
+const { createWaitChecker, isTaskDone } = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -55,7 +55,8 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
     if (s.exitCode != null) return s.exitCode === 0 || s.killed ? 'afsluttet' : 'fejlet';
     if (s.kind === 'shell') return 'aaben';
     if (!isIdleAgent(s)) return 'arbejder';
-    return currentWait(s) ? 'afventer' : 'venter';
+    if (currentWait(s)) return 'afventer';
+    return isTaskDone(s.buffer, { hadInput: s.hadUserInput }) ? 'faerdig' : 'venter';
   }
 
   function view(s) {
@@ -101,7 +102,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
       agentId: kind === 'agent' ? agent.id : null,
       name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
-      exitCode: null, killed: false, bracketed: false, pendingPaste: false, waitState: null, buffer: '', clients: new Set(), proc,
+      exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null, buffer: '', clients: new Set(), proc,
     };
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
@@ -150,6 +151,7 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
       write(data) {
         if (s.exitCode != null) return;
         s.lastInputAt = Date.now();
+        if (/[\r\n]/.test(data)) s.hadUserInput = true;
         // Enter, Ctrl+C eller Ctrl+U betyder, at en indsat tekst er sendt eller slettet.
         if (/[\r\n\x03\x15]/.test(data)) s.pendingPaste = false;
         s.proc.write(data);

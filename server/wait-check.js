@@ -32,9 +32,12 @@ const CHOICE_RE = /^[❯>]?\s*1\.\s*(?:yes|allow|approve|ja)\b/i;
 const BARE_PROMPT_RE = /^[>❯$#]\s*$/;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
+const INTERRUPTED_RE = /\b(request interrupted|interrupted by user|aborted|cancelled|canceled)\b/i;
 
 const isTurnDone = (l) => TURN_DONE_RE.test(l) && !/(?:…|\.\.\.)\s*$/.test(l) && !INTERRUPT_RE.test(l);
 const isSpinnerLine = (l) => (BRAILLE_SPINNER_RE.test(l) || SYMBOL_SPINNER_RE.test(l)) && !isTurnDone(l);
+const looksLikeQuestion = (l) => /\?\s*$/.test(l) && !/https?:\/\/\S*\?/.test(l);
+const hasExplicitUserPrompt = (lines) => lines.some((l) => USER_PROMPT_RE.test(l) || YES_NO_RE.test(l) || CHOICE_RE.test(l) || USER_WAIT_RE.test(l));
 
 // Prioriteret rækkefølge: det mest specifikke vises først.
 const PROC_RULES = [
@@ -238,19 +241,23 @@ function cleanLines(buffer) {
     .filter((l) => l && !CHROME_RE.test(l) && (INTERRUPT_RE.test(l) || !FOOTER_RE.test(l)));
 }
 
-function inspectBuffer(buffer) {
+function splitTurnLines(buffer) {
   const lines = cleanLines(buffer).slice(-14);
-  if (!lines.length) return null;
-
-  // Ignorer gamle spinner- og interrupt-linjer fra før sidste afsluttede Claude Code-tur.
+  if (!lines.length) return { lines: [], turnStart: 0, sawTurnDone: false, turnLines: [] };
   let turnStart = 0;
+  let sawTurnDone = false;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (isTurnDone(lines[i])) {
       turnStart = i + 1;
+      sawTurnDone = true;
       break;
     }
   }
-  const turnLines = lines.slice(turnStart);
+  return { lines, turnStart, sawTurnDone, turnLines: lines.slice(turnStart) };
+}
+
+function inspectBuffer(buffer) {
+  const { turnLines } = splitTurnLines(buffer);
   if (!turnLines.length) return null;
 
   const recentBottom = turnLines.slice(-6);
@@ -258,14 +265,13 @@ function inspectBuffer(buffer) {
   const hasSpinner = recentBottom.some(isSpinnerLine);
 
   // Eksplicitte godkendelses-/bruger-prompts vinder altid.
-  if (recentBottom.some((l) => USER_PROMPT_RE.test(l) || YES_NO_RE.test(l) || CHOICE_RE.test(l) || USER_WAIT_RE.test(l))) {
+  if (hasExplicitUserPrompt(recentBottom)) {
     return null;
   }
 
   // Uden aktiv spinner eller interrupt-linje betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
   if (!hasInterrupt && !hasSpinner) {
     const lastBottom = turnLines.slice(-4);
-    const looksLikeQuestion = (l) => /\?\s*$/.test(l) && !/https?:\/\/\S*\?/.test(l);
     if (lastBottom.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;
   }
 
@@ -297,6 +303,33 @@ function inspectBuffer(buffer) {
   }
 
   return null;
+}
+
+// Afgør om en stille agent uden kørende baggrundsopgaver er helt færdig med opgaven (i stedet for at vente på svar/godkendelse).
+function isTaskDone(buffer, { hadInput = false } = {}) {
+  const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer);
+  if (!lines.length) return false;
+
+  if (turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l))) return false;
+  if (turnLines.slice(-6).some(isSpinnerLine)) return false;
+
+  if (sawTurnDone) {
+    const beforeDone = lines.slice(Math.max(0, turnStart - 6), turnStart - 1);
+    if (hasExplicitUserPrompt(turnLines) || turnLines.slice(-4).some(looksLikeQuestion)) return false;
+    if (hasExplicitUserPrompt(beforeDone) || beforeDone.slice(-2).some(looksLikeQuestion)) return false;
+    if (beforeDone.slice(-2).some((l) => INTERRUPTED_RE.test(l))) return false;
+    return true;
+  }
+
+  let promptIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (BARE_PROMPT_RE.test(lines[i])) { promptIdx = i; break; }
+  }
+  if (promptIdx < 1 || lines.length - 1 - promptIdx > 3) return false;
+  const recentBeforePrompt = lines.slice(Math.max(0, promptIdx - 6), promptIdx);
+  if (hasExplicitUserPrompt(recentBeforePrompt) || recentBeforePrompt.slice(-2).some(looksLikeQuestion)) return false;
+  if (recentBeforePrompt.slice(-2).some((l) => INTERRUPTED_RE.test(l))) return false;
+  return hadInput || recentBeforePrompt.some((l) => COMPLETION_RE.test(l));
 }
 
 function createWaitChecker({ query = queryProcesses } = {}) {
@@ -341,5 +374,6 @@ module.exports = {
   createWaitChecker,
   inspectProcessTree,
   inspectBuffer,
+  isTaskDone,
   sanitizeDetail,
 };
