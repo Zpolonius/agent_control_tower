@@ -28,19 +28,12 @@ const INTERRUPT_RE = /\b(esc to interrupt|ctrl\+c to interrupt|ctrl\+b to run in
 const CHROME_RE = /^[─━═╭╮╰╯│┃|+`~\-=_.\s]+$/;
 const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift\+tab to cycle\b|logout$|(?:[⏵⏸▶►▸]+\s*)?(?:bypass permissions|accept edits|plan mode)\s+on\b)/i;
 const USER_WAIT_RE = /\b((?:waiting|awaiting)\s+(?:for\s+)?(?:user|you|your|input|reply|response|confirmation|approval|permission|decision)|venter på (?:dig|dit svar|svar fra dig|godkendelse|tilladelse|input))\b/i;
-<<<<<<< HEAD
-const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
-const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
-const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
-=======
 const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|(?:needs|requires) (?:your )?(?:approval|permission|confirmation)|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|type here to tell|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
 const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run\s+(?:once|this(?:\s+command)?)|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
+const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
 const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
->>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
 const INTERRUPTED_RE = /\b(request interrupted|interrupted by user|aborted|cancelled|canceled)\b/i;
@@ -333,13 +326,8 @@ function inspectBuffer(buffer) {
   const hasInterrupt = turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l));
   const hasSpinner = recentBottom.some(isSpinnerLine);
 
-<<<<<<< HEAD
-  // Eksplicitte godkendelses-/bruger-prompts i bunden vinder altid.
-  if (hasExplicitUserPrompt(recentBottom)) {
-=======
   // Eksplicitte godkendelses-/bruger-prompts vinder altid – også når baggrundsopgaver kører.
   if (findActivePromptIndex(turnLines) !== -1) {
->>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
     return null;
   }
 

@@ -18,13 +18,8 @@
   }
 
   const state = {
-<<<<<<< HEAD
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
-    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, stoppedByMe: new Set(), target: null, terms: new Map(),
-=======
-    data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false,
     brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
->>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
   };
 
   const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
