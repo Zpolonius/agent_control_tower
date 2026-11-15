@@ -58,6 +58,9 @@ function main() {
     console.error(`Rodmappen fra indstillingerne findes ikke (eller er ikke en mappe): ${config.root}`);
     process.exit(1);
   }
+  if (config.tokensFile === '') {
+    config.tokensFile = path.join(path.dirname(CONFIG_FILE), 'control-tower.tokens.json');
+  }
 
   const token = newToken();
   const app = createApp({ config, token });
