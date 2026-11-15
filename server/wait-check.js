@@ -20,16 +20,21 @@ const IGNORED_HELPERS = new Set([
 
 const PERSISTENT_CMD_RE = /\b(mcp[-_]?server|@modelcontextprotocol|--mcp\b|tsserver|eslint_d|pyright|rust-analyzer|clangd|language[-_]?server|crashpad)\b/i;
 const SHELL_EXEC_RE = /(?:^|\s)(?:-c|-command|-encodedcommand|\/c|\/k)\b/i;
-const SPINNER_RE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✻✽✢●]\s*\S/;
+const BRAILLE_SPINNER_RE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S/;
+const SYMBOL_SPINNER_RE = /^[✶✻✽✢✳]\s*\S.*(?:…|\.\.\.)(?:\s*\([^)]*\))?\s*$/;
 const INTERRUPT_RE = /\b(esc to interrupt|ctrl\+c to interrupt|ctrl\+b to run in background)\b/i;
 const CHROME_RE = /^[─━═╭╮╰╯│┃|+`~\-=_.\s]+$/;
-const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|logout$)/i;
+const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift\+tab to cycle\b|logout$)/i;
 const USER_WAIT_RE = /\b(waiting for (?:user|you|your|input|reply|response|confirmation|approval)|venter på (?:dig|dit svar|svar fra dig|godkendelse|input))\b/i;
 const USER_PROMPT_RE = /\b(do you want to|would you like to|allow once|allow for this session|approve this|proceed\?|continue\?|press enter|tryk på enter|select an option|choose an option|esc to cancel)\b/i;
 const YES_NO_RE = /(?:\[(?:y\/n|Y\/n|y\/N|yes\/no)\]|\((?:y\/n|Y\/n|y\/N|yes\/no)\))/i;
 const CHOICE_RE = /^[❯>]?\s*1\.\s*(?:yes|allow|approve|ja)\b/i;
 const BARE_PROMPT_RE = /^[>❯$#]\s*$/;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
+const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
+
+const isTurnDone = (l) => TURN_DONE_RE.test(l) && !/(?:…|\.\.\.)\s*$/.test(l) && !INTERRUPT_RE.test(l);
+const isSpinnerLine = (l) => (BRAILLE_SPINNER_RE.test(l) || SYMBOL_SPINNER_RE.test(l)) && !isTurnDone(l);
 
 // Prioriteret rækkefølge: det mest specifikke vises først.
 const PROC_RULES = [
@@ -223,13 +228,14 @@ function cleanLines(buffer) {
   const text = tail
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-9;?]*[mhl]/g, '')
+    .replace(/\x1b\[\d*C/g, ' ')
     .replace(/\x1b\[[0-9;?<=>]*[ -/]*[@-~]/g, '\n')
     .replace(/\x1b[@-_]/g, '')
     .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
   return text
     .split(/[\r\n]+/)
     .map((l) => l.trim())
-    .filter((l) => l && !CHROME_RE.test(l) && !FOOTER_RE.test(l));
+    .filter((l) => l && !CHROME_RE.test(l) && (INTERRUPT_RE.test(l) || !FOOTER_RE.test(l)));
 }
 
 function inspectBuffer(buffer) {
@@ -238,7 +244,7 @@ function inspectBuffer(buffer) {
 
   const recentBottom = lines.slice(-6);
   const hasInterrupt = lines.slice(-10).some((l) => INTERRUPT_RE.test(l));
-  const hasSpinner = recentBottom.some((l) => SPINNER_RE.test(l));
+  const hasSpinner = recentBottom.some(isSpinnerLine);
 
   // Eksplicitte godkendelses-/bruger-prompts vinder altid.
   if (recentBottom.some((l) => USER_PROMPT_RE.test(l) || YES_NO_RE.test(l) || CHOICE_RE.test(l) || USER_WAIT_RE.test(l))) {
@@ -247,16 +253,16 @@ function inspectBuffer(buffer) {
 
   // Uden aktiv spinner eller interrupt-linje betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
   if (!hasInterrupt && !hasSpinner) {
-    const lastTwo = lines.slice(-2);
+    const lastBottom = lines.slice(-4);
     const looksLikeQuestion = (l) => /\?\s*$/.test(l) && !/https?:\/\/\S*\?/.test(l);
-    if (lastTwo.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;
+    if (lastBottom.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;
   }
 
   // Læs nedefra og op; stop hvis vi rammer en afslutningslinje (så gamle testkørsler højere oppe ikke tæller).
   const activeTail = [];
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const l = lines[i];
-    if (COMPLETION_RE.test(l)) break;
+    if (COMPLETION_RE.test(l) || isTurnDone(l)) break;
     activeTail.push(l);
   }
   if (!activeTail.length) return null;
@@ -275,7 +281,7 @@ function inspectBuffer(buffer) {
   }
 
   if (hasInterrupt || hasSpinner) {
-    const line = activeTail.find((l) => SPINNER_RE.test(l)) || activeTail.find((l) => !BARE_PROMPT_RE.test(l) && !INTERRUPT_RE.test(l)) || '';
+    const line = activeTail.find(isSpinnerLine) || activeTail.find((l) => !BARE_PROMPT_RE.test(l) && !INTERRUPT_RE.test(l)) || '';
     return { waitingFor: 'baggrundsopgave', detail: sanitizeDetail(line), source: 'buffer' };
   }
 

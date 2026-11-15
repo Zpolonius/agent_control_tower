@@ -119,6 +119,37 @@ test('inspectBuffer: skelner mellem aktiv venten og bruger-prompts', () => {
   assert.equal(inspectBuffer('Skal jeg køre e2e tests med Playwright nu?'), null);
   assert.equal(inspectBuffer('Waiting for user input before running flutter test'), null);
   assert.equal(inspectBuffer('I finished building the feature.\r\n> '), null);
+
+  // Afsluttet Claude Code-tur ("✻ Sautéed for 45s · done 4:19 PM") + plan med flutter test + spørgsmål -> venter på brugeren!
+  const claudeFinishedPlan = [
+    'Til sidst kører jeg flutter analyze og flutter test. firestore.rules skal efter planen ikke ændres.',
+    'Skal jeg gå i gang, eller vil du hellere have en bekræftelsesdialog ("Erstat Lasagne?")?',
+    '✻ Sautéed for 45s · done 4:19 PM',
+    '──────────────────────────',
+    '❯ ',
+    '──────────────────────────',
+    '  ? for shortcuts',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(claudeFinishedPlan), null);
+
+  // Afsluttet Claude Code-tur med bullet (●) eller uden spørgsmål og med mode-linje -> venter på brugeren!
+  const claudeFinishedBullet = [
+    '● Jeg har opdateret filen og er klar til næste skridt.',
+    '* Brewed for 1m 23s',
+    '──────────────────────────',
+    '❯ ',
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(claudeFinishedBullet), null);
+
+  // Aktiv "? for shortcuts · esc to interrupt" må IKKE blive filtreret væk som ren footer
+  const claudeSilentWork = [
+    '● Bash(git\x1b[1Cstatus)',
+    '──────────────────────────',
+    '❯ ',
+    '? for shortcuts · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(claudeSilentWork).waitingFor, 'baggrundsopgave');
 });
 
 test('sanitizeDetail: skjuler tokens og hemmeligheder', () => {
