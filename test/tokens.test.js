@@ -230,3 +230,76 @@ test('API /api/tokens og /api/state: kræver nøgle og returnerer samlet token-r
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('tokens: knytter genoptaget Claude-session og lægger subagenter til hovedsessionen', async () => {
+  const { tmp, alpha, claudeProjectsDir, config } = makeTempSetup();
+  try {
+    const now = Date.now();
+    const yesterdayIso = new Date(now - 24 * 3600 * 1000).toISOString();
+    const todayIso = new Date(now - 2000).toISOString();
+    const proj = path.join(claudeProjectsDir, encodeClaudePath(alpha));
+    fs.mkdirSync(path.join(proj, 'sess-resumed', 'subagents'), { recursive: true });
+
+    fs.writeFileSync(path.join(proj, 'sess-resumed.jsonl'), [
+      JSON.stringify({
+        type: 'assistant', cwd: alpha, timestamp: yesterdayIso, sessionId: 'sess-resumed',
+        message: { id: 'm1', model: 'claude-sonnet-4-5', usage: { input_tokens: 100, output_tokens: 50 } },
+      }),
+      JSON.stringify({
+        type: 'assistant', cwd: alpha, timestamp: todayIso, sessionId: 'sess-resumed',
+        message: { id: 'm2', model: 'claude-sonnet-4-5', usage: { input_tokens: 200, output_tokens: 100 } },
+      }),
+    ].join('\n') + '\n');
+
+    fs.writeFileSync(path.join(proj, 'sess-resumed', 'subagents', 'agent-a1.jsonl'), [
+      JSON.stringify({
+        type: 'assistant', cwd: alpha, timestamp: todayIso, sessionId: 'sess-resumed',
+        message: { id: 'm_sub1', model: 'claude-haiku-4-5', usage: { input_tokens: 300, output_tokens: 250 } },
+      }),
+    ].join('\n') + '\n');
+
+    // En frisk session der starter samtidig skal stadig foretrække sin egen nye log frem for den ældre.
+    fs.writeFileSync(path.join(proj, 'sess-fresh.jsonl'), JSON.stringify({
+      type: 'assistant', cwd: alpha, timestamp: todayIso, sessionId: 'sess-fresh',
+      message: { id: 'mf1', model: 'claude-sonnet-4-5', usage: { input_tokens: 40, output_tokens: 10 } },
+    }) + '\n');
+
+    const t = createTokens(config, { getRepoNames: async () => ['alpha', 'beta'] });
+    const freshSession = {
+      id: 'aaaa00001111222233334444',
+      repo: 'alpha',
+      kind: 'agent',
+      agentId: 'claude',
+      name: 'Claude Code',
+      status: 'afsluttet',
+      startedAt: now - 3000,
+      endedAt: now - 500,
+    };
+    const resumedSession = {
+      id: 'bbbb00001111222233334444',
+      repo: 'alpha',
+      kind: 'agent',
+      agentId: 'claude',
+      name: 'Claude Code #2',
+      status: 'afsluttet',
+      startedAt: now - 10000,
+      endedAt: now - 1000,
+    };
+    t.recordSession('start', { ...freshSession, status: 'arbejder', endedAt: null });
+    t.recordSession('exit', freshSession);
+    t.recordSession('start', { ...resumedSession, status: 'arbejder', endedAt: null });
+    t.recordSession('exit', resumedSession);
+
+    const st = await t.summaryForState([]);
+    assert.equal(st.sessionTokens[freshSession.id].matched, true);
+    assert.equal(st.sessionTokens[freshSession.id].total, 50);
+    assert.equal(st.sessionTokens[resumedSession.id].matched, true);
+    assert.equal(st.sessionTokens[resumedSession.id].total, 1000);
+    assert.equal(st.tokenSummary.total.total, 1050);
+
+    const rep = await t.report({ period: 'all', fresh: true });
+    assert.equal(rep.sessions.length, 2, 'subagenter må ikke optræde som ekstra eksterne sessioner');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

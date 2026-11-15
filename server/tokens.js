@@ -296,6 +296,7 @@ function createTokens(config, { getRepoNames } = {}) {
       logType: 'agy',
       firstAt: firstAt ?? Math.round(st.birthtimeMs || st.mtimeMs),
       lastAt: lastAt ?? Math.round(st.mtimeMs),
+      mtimeMs: Math.round(st.mtimeMs),
       detectedRepo: topRepoHit(hits),
       counts,
       byDay,
@@ -364,6 +365,7 @@ function createTokens(config, { getRepoNames } = {}) {
       logType: 'claude',
       firstAt: firstAt ?? Math.round(st.birthtimeMs || st.mtimeMs),
       lastAt: lastAt ?? Math.round(st.mtimeMs),
+      mtimeMs: Math.round(st.mtimeMs),
       detectedRepo,
       counts,
       byDay,
@@ -397,18 +399,62 @@ function createTokens(config, { getRepoNames } = {}) {
     return { available: true, logs };
   }
 
+  function mergeClaudeSessionGroup(parentRel, entries) {
+    if (entries.length === 1 && !entries[0].isSubagent) return entries[0].parsed;
+    const parent = entries.find((x) => !x.isSubagent)?.parsed || null;
+    const counts = emptyCounts();
+    const byDay = {};
+    const modelsByDay = {};
+    let firstAt = parent ? parent.firstAt : null;
+    let lastAt = 0;
+    let mtimeMs = 0;
+    let detectedRepo = parent ? parent.detectedRepo : null;
+
+    for (const { parsed } of entries) {
+      addCounts(counts, parsed.counts);
+      if (!parent && (firstAt == null || parsed.firstAt < firstAt)) firstAt = parsed.firstAt;
+      if (parsed.lastAt > lastAt) lastAt = parsed.lastAt;
+      if ((parsed.mtimeMs || 0) > mtimeMs) mtimeMs = parsed.mtimeMs || 0;
+      if (!detectedRepo && parsed.detectedRepo) detectedRepo = parsed.detectedRepo;
+      for (const [day, mMap] of Object.entries(parsed.modelsByDay || {})) {
+        for (const [model, delta] of Object.entries(mMap)) {
+          addDayModel(byDay, modelsByDay, day, model, delta);
+        }
+      }
+      for (const [day, dc] of Object.entries(parsed.byDay || {})) {
+        if (!parsed.modelsByDay || !parsed.modelsByDay[day]) {
+          if (!byDay[day]) byDay[day] = emptyCounts();
+          addCounts(byDay[day], dc);
+        }
+      }
+    }
+
+    return {
+      id: `claude:${parentRel}`,
+      logType: 'claude',
+      firstAt: firstAt ?? 0,
+      lastAt: lastAt || mtimeMs,
+      mtimeMs,
+      detectedRepo,
+      counts,
+      byDay,
+      modelsByDay,
+    };
+  }
+
   async function scanClaudeLogs(matchers, repoSig) {
     if (!config.claudeProjectsDir) return { available: false, logs: [] };
     let realRoot;
     try { realRoot = fs.realpathSync(config.claudeProjectsDir); } catch { return { available: false, logs: [] }; }
 
     const files = [];
+    const maxWalk = MAX_LOG_FILES * 4;
     function walk(dir, depth, projectFolder) {
-      if (depth > MAX_CLAUDE_DEPTH || files.length >= MAX_LOG_FILES) return;
+      if (depth > MAX_CLAUDE_DEPTH || files.length >= maxWalk) return;
       let entries;
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
       for (const e of entries) {
-        if (files.length >= MAX_LOG_FILES) break;
+        if (files.length >= maxWalk) break;
         const abs = path.join(dir, e.name);
         if (e.isDirectory() || e.isSymbolicLink()) {
           let realDir;
@@ -426,16 +472,30 @@ function createTokens(config, { getRepoNames } = {}) {
     }
     walk(realRoot, 0, '');
 
-    const logs = [];
+    if (files.length > MAX_LOG_FILES) {
+      files.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+      files.length = MAX_LOG_FILES;
+    }
+
+    // Læg subagenter (<session>/subagents/agent-*.jsonl) sammen med hovedsessionen så kort og total passer.
+    const groups = new Map();
     for (const f of files) {
+      let parsed;
       const cached = fileCache.get(f.real);
       if (cached && cached.mtimeMs === f.st.mtimeMs && cached.size === f.st.size && cached.repoSig === repoSig) {
-        logs.push(cached.parsed);
-        continue;
+        parsed = cached.parsed;
+      } else {
+        parsed = await parseClaudeTranscript(f.real, f.st, f.rel, f.projectFolder, matchers);
+        fileCache.set(f.real, { mtimeMs: f.st.mtimeMs, size: f.st.size, repoSig, parsed });
       }
-      const parsed = await parseClaudeTranscript(f.real, f.st, f.rel, f.projectFolder, matchers);
-      fileCache.set(f.real, { mtimeMs: f.st.mtimeMs, size: f.st.size, repoSig, parsed });
-      logs.push(parsed);
+      const isSubagent = /\/subagents\/[^/]+\.jsonl$/i.test(f.rel);
+      const parentRel = isSubagent ? f.rel.replace(/\/subagents\/[^/]+\.jsonl$/i, '.jsonl') : f.rel;
+      if (!groups.has(parentRel)) groups.set(parentRel, []);
+      groups.get(parentRel).push({ isSubagent, parsed });
+    }
+    const logs = [];
+    for (const [parentRel, group] of groups) {
+      logs.push(mergeClaudeSessionGroup(parentRel, group));
     }
     return { available: true, logs };
   }
@@ -453,24 +513,37 @@ function createTokens(config, { getRepoNames } = {}) {
       .filter((e) => !e.logId && (e.logType === 'agy' || e.logType === 'claude'))
       .sort((a, b) => a.startedAt - b.startedAt);
 
-    for (const entry of unlinked) {
-      const endBound = (entry.endedAt || Date.now()) + 15000;
-      const startBound = entry.startedAt - 15000;
-      let best = null;
-      let bestDist = Infinity;
-      for (const l of logs) {
-        if (l.logType !== entry.logType || claimed.has(l.id)) continue;
-        if (l.firstAt < startBound || l.firstAt > endBound) continue;
-        if (l.detectedRepo && l.detectedRepo !== entry.repo) continue;
-        const dist = Math.abs(l.firstAt - entry.startedAt);
-        if (dist < bestDist) { best = l; bestDist = dist; }
+    function linkPass(allowResumed) {
+      const pairs = [];
+      for (const entry of unlinked) {
+        if (entry.logId) continue;
+        const endBound = (entry.endedAt || Date.now()) + 15000;
+        const startBound = entry.startedAt - 15000;
+        for (const l of logs) {
+          if (l.logType !== entry.logType || claimed.has(l.id)) continue;
+          if (l.detectedRepo && l.detectedRepo !== entry.repo) continue;
+          let dist;
+          if (!allowResumed) {
+            if (l.firstAt < startBound || l.firstAt > endBound) continue;
+            dist = Math.abs(l.firstAt - entry.startedAt);
+          } else {
+            const activeEnd = Math.max(l.lastAt, l.mtimeMs || 0);
+            if (l.firstAt > endBound || activeEnd < entry.startedAt - 5000) continue;
+            dist = Math.abs(activeEnd - (entry.endedAt || Date.now()));
+          }
+          pairs.push({ entry, log: l, dist });
+        }
       }
-      if (best) {
-        entry.logId = best.id;
-        claimed.add(best.id);
+      pairs.sort((a, b) => a.dist - b.dist || a.entry.startedAt - b.entry.startedAt);
+      for (const { entry, log } of pairs) {
+        if (entry.logId || claimed.has(log.id)) continue;
+        entry.logId = log.id;
+        claimed.add(log.id);
         ledgerDirty = true;
       }
     }
+    linkPass(false);
+    linkPass(true);
 
     // Opdater regnskabet med friske tal fra tilknyttede logfiler.
     for (const entry of Object.values(ledger.sessions)) {
