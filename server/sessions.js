@@ -45,7 +45,7 @@ function lastLine(buffer, errorsFirst) {
   return lines.length ? short(lines[lines.length - 1]) : '';
 }
 
-function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
+function createSessions(config, { waitChecker = createWaitChecker(), onSessionEvent } = {}) {
   const sessions = new Map();
 
   const isIdleAgent = (s) => s.exitCode == null && s.kind === 'agent' && Date.now() - s.lastOutputAt >= config.idleSeconds * 1000;
@@ -129,10 +129,13 @@ function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
       s.endedAt = Date.now();
+      if (s.kind === 'agent' && onSessionEvent) onSessionEvent('exit', view(s));
       for (const c of s.clients) c.onExit(s.exitCode);
     });
     sessions.set(s.id, s);
-    return view(s);
+    const v = view(s);
+    if (s.kind === 'agent' && onSessionEvent) onSessionEvent('start', v);
+    return v;
   }
 
   function get(id) { return typeof id === 'string' ? sessions.get(id) : undefined; }

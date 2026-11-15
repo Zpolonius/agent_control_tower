@@ -58,6 +58,12 @@ Fanen Skills i et repo viser repoets egne skills (`.claude/skills` og ældre `.c
 
 Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Stien til personlige skills kan ændres med `personalSkillsDir` i indstillingsfilen.
 
+## Token-regnskab
+
+Punktet Regnskab i menuen (og token-tælleren i topbaren) samler forbruget opdelt i input, cache og output – både pr. agent, pr. projekt/repo, pr. model, pr. dag og samlet total.
+
+Control Tower kombinerer sit eget sessionsregnskab (`control-tower.tokens.json`, der huskes på tværs af genstarter) med lokale logfiler fra Claude Code (`~/.claude/projects`) og Antigravity/Gemini (`~/.gemini/antigravity-cli/brain`), så også historik og kørsler startet uden for Control Tower tælles med uden dobbelttælling. Indstillingerne `tokensFile`, `claudeProjectsDir` og `agyBrainDir` kan ændres eller sættes til `false` i `control-tower.config.json`.
+
 ## Beskeder, lyd og fanens titel
 
 Knapperne "Beskeder" og "Lyd" øverst er slået fra, indtil du selv slår dem til. Med beskeder til får du en notifikation fra browseren, når en agent venter på dig, går ned eller bliver færdig – medmindre du allerede kigger på netop den agent, eller selv har stoppet den. Lyden er to korte toner. Fanens titel viser altid antallet først og derefter en lille kommentar, fx "(1) Agenten tripper". Valgene huskes i din browser.
@@ -84,7 +90,7 @@ Control Tower kan starte terminaler på din maskine, så adgangen er låst ned:
 - Forespørgsler fra andre websites og andre lokale porte afvises (tjek af værtsnavn og afsender), også for terminal-forbindelsen.
 - En skæv eller ødelagt forespørgsel bliver afvist og kan ikke vælte programmet.
 - Browseren kan kun vælge en agent via dens id. Selve kommandoen står i din indstillingsfil.
-- Fra din hjemmemappe læses kun `SKILL.md`-filer under skills-mappen – aldrig andre filer i `~/.claude`.
+- Fra din hjemmemappe læses kun `SKILL.md`-filer under skills-mappen samt token-tal, modelnavn, tidsstempel og projektsti fra `.jsonl`-logfiler i `~/.claude/projects` og `~/.gemini/antigravity-cli/brain` – aldrig nøgler eller samtaleindhold.
 - Repos og hjerne-filer slås op på en liste, så stier som `../..` ikke virker, og symlinks ud af et repo vises ikke.
 - Indhold fra filer og GitHub vises som tekst og kan ikke køre kode i browseren.
 - Tekst (issue, review, skill-beskrivelse) indsættes kun hos en agent, aldrig i en almindelig terminal, og sendes først når du trykker Enter. Læs den igennem først: issues og reviews er tekst skrevet af andre. Ligger der allerede en usendt tekst hos agenten, afvises en ny, så de ikke bliver klistret sammen.
