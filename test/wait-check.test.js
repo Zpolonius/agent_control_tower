@@ -115,6 +115,52 @@ test('inspectBuffer: skelner mellem aktiv venten og bruger-prompts', () => {
   ].join('\r\n');
   assert.equal(inspectBuffer(permissionPrompt), null);
 
+  // Gemini / Antigravity CLI "Run this command?" med ●-ikon, testkommando og interrupt-linje -> venter på brugeren!
+  const geminiRunPrompt = [
+    '● Run command',
+    'Run this command?',
+    '  flutter test',
+    '❯ Yes',
+    '  Always allow',
+    '  No',
+    'esc to interrupt',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(geminiRunPrompt), null);
+
+  // Gemini "Run this command?" i ramme med ConPTY cursor-forward (\x1b[1C) og lang flerlinje-kommando
+  const geminiBoxedPrompt = [
+    '╭────────────────────────────────────────╮',
+    '│ Run\x1b[1Cthis\x1b[1Ccommand?                      │',
+    '│   cd C:\\app                            │',
+    '│   git fetch origin                     │',
+    '│   npm run build                        │',
+    '│   npm test                             │',
+    '│   --reporter=dot                       │',
+    '│   --timeout=5000                       │',
+    '│   [Run]  [Cancel]                      │',
+    '╰────────────────────────────────────────╯',
+    'esc to interrupt',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(geminiBoxedPrompt), null);
+
+  // Enkeltstående "Proceed?" med aktiv interrupt-linje -> venter på brugeren!
+  assert.equal(inspectBuffer('Proceed?\r\nesc to interrupt'), null);
+
+  // Et gammelt godkendelses-prompt højere oppe må ikke skjule en ny aktiv spinner nedenunder
+  const spinnerAfterOldPrompt = [
+    'Run this command?',
+    '  npm test',
+    '  line 2',
+    '  line 3',
+    '  line 4',
+    '  line 5',
+    '  line 6',
+    '  line 7',
+    '⠋ Running npm test…',
+    'esc to interrupt',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(spinnerAfterOldPrompt).waitingFor, 'tests');
+
   // Spørgsmål til brugeren -> venter på brugeren!
   assert.equal(inspectBuffer('Skal jeg køre e2e tests med Playwright nu?'), null);
   assert.equal(inspectBuffer('Waiting for user input before running flutter test'), null);
