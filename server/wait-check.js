@@ -59,7 +59,7 @@ const PROC_RULES = [
 ];
 
 const BUFFER_RULES = [
-  { waitingFor: 'subagenter', re: /\b(sub-?agents?|subagenter|background agents?|swarm|teammates?|spawning agent|waiting for \d+ agents?|running \d+ agents?|\d+ agents? running|agent tools? running)\b/i },
+  { waitingFor: 'subagenter', re: /\b(spawning (?:sub-?)?agents?|waiting for (?:\d+ )?(?:sub-?)?agents?|running \d+ (?:sub-?)?agents?|\d+ (?:sub-?|background )?agents? running|agent tools? running|(?:sub-?|background )agents? running|kører subagenter|venter på subagenter)\b/i },
   { waitingFor: 'subagenter', re: /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i },
   { waitingFor: 'e2e-tests', re: /\b(playwright|cypress|puppeteer|selenium|webdriver|appium|maestro|detox|patrol|e2e[- ]tests?|end-to-end)\b/i },
   { waitingFor: 'tests', re: /\b(running tests?|kører tests?|test suite|waiting for tests?|vitest|jest|mocha|pytest|flutter test|dart test|npm test|pnpm test|cargo test|go test|node --test)\b/i },

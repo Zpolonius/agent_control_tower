@@ -148,7 +148,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return n ? `${name} ${n + 1}` : name;
   }
 
-  function create({ repo, cwd, kind, agent, baseline }) {
+  function create({ repo, cwd, kind, agent, baseline, initialPaste }) {
     const running = [...sessions.values()].filter((s) => s.exitCode == null).length;
     if (running >= config.maxSessions) {
       const err = new Error(`Der kører allerede ${running} sessioner (maks. ${config.maxSessions}). Stop eller fjern en session først.`);
@@ -161,14 +161,17 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
     const now = Date.now();
+    const queuedPaste = kind === 'agent' && typeof initialPaste === 'string' && initialPaste.trim().length > 0 ? initialPaste : null;
     const s = {
       id: crypto.randomBytes(12).toString('hex'), repo, kind, cwd, baseline: baseline || null,
       agentId: kind === 'agent' ? agent.id : null,
       name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
+      queuedPaste, initialPasteTimer: null,
       approvalSince: null, quotaSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
     };
+    sessions.set(s.id, s);
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
       // Ingen af delene tæller som at agenten arbejder.
@@ -188,6 +191,24 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         const nl = cut.indexOf('\n');
         s.buffer = nl !== -1 && nl < 8192 ? cut.slice(nl + 1) : cut;
       }
+      if (s.queuedPaste) {
+        clearTimeout(s.initialPasteTimer);
+        if (s.bracketed) {
+          const q = s.queuedPaste;
+          s.queuedPaste = null;
+          s.initialPasteTimer = null;
+          paste(s.id, q);
+        } else {
+          s.initialPasteTimer = setTimeout(() => {
+            s.initialPasteTimer = null;
+            if (!s.queuedPaste) return;
+            const q = s.queuedPaste;
+            s.queuedPaste = null;
+            paste(s.id, q);
+          }, 900);
+          s.initialPasteTimer.unref();
+        }
+      }
       if (s.kind === 'agent' && !s.approvalTimer) {
         s.approvalTimer = setTimeout(() => {
           s.approvalTimer = null;
@@ -199,15 +220,14 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       for (const c of s.clients) c.onData(data);
     });
     proc.onExit(({ exitCode, signal }) => {
-      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer);
-      s.approvalTimer = null;
+      clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.initialPasteTimer);
+      s.approvalTimer = null; s.initialPasteTimer = null; s.queuedPaste = null;
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
       s.endedAt = Date.now();
       if (s.kind === 'agent' && onSessionEvent) onSessionEvent('exit', view(s));
       for (const c of s.clients) c.onExit(s.exitCode);
     });
-    sessions.set(s.id, s);
     const v = view(s);
     if (s.kind === 'agent' && onSessionEvent) onSessionEvent('start', v);
     return v;
@@ -268,6 +288,23 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return 'ok';
   }
 
+  // Sender et hurtig-svar (fx ja/nej/enter/1/2/esc) direkte til en kørende agent fra overblikket.
+  const KEYS = { enter: '\r', yes: 'y\r', no: 'n\r', '1': '1\r', '2': '2\r', esc: '\x1b' };
+  function approve(id, key) {
+    const s = get(id);
+    if (!s || s.exitCode != null) return 'gone';
+    if (s.kind !== 'agent') return 'not-agent';
+    if (!Object.prototype.hasOwnProperty.call(KEYS, key)) return 'invalid';
+    s.lastInputAt = Date.now();
+    s.hadUserInput = true;
+    s.pendingPaste = false;
+    s.approvalSince = null;
+    s.quotaSince = null;
+    s.approvalCooldownUntil = Date.now() + 600;
+    s.proc.write(KEYS[key]);
+    return 'ok';
+  }
+
   // Sender et signal til hele processens gruppe (agenten og det den selv har startet).
   function signal(s, sig) {
     if (s.exitCode != null) return;
@@ -281,6 +318,9 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   // Først pænt (som når et terminalvindue lukkes), så bestemt, og til sidst tvunget – nogle programmer ignorerer det første.
   function kill(s) {
     if (s.exitCode != null) return;
+    clearTimeout(s.initialPasteTimer);
+    s.initialPasteTimer = null;
+    s.queuedPaste = null;
     s.killed = true;
     signal(s, 'SIGHUP');
     s.killTimer1 = setTimeout(() => signal(s, 'SIGTERM'), 1500);
@@ -301,7 +341,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   function forceAll() { for (const s of sessions.values()) { s.killed = true; signal(s, 'SIGKILL'); } }
   const running = () => [...sessions.values()].filter((s) => s.exitCode == null).length;
 
-  return { create, get, attach, paste, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
+  return { create, get, attach, paste, approve, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
 }
 
 module.exports = { createSessions, lastLine, PASTE_MAX };

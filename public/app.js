@@ -44,6 +44,21 @@
     const c = cacheTotal(t);
     return `${fmtTok(t.total)} tokens (${fmtTok(t.input)} ind${c ? ` · ${fmtTok(c)} cache` : ''} · ${fmtTok(t.output)} ud)`;
   }
+  function contextChipProps(tokens) {
+    const ctx = tokens && tokens.contextTokens;
+    if (!ctx) return { hidden: true, cls: 'chip muted', text: '', title: '' };
+    const cls = ctx >= 160000 ? 'chip fail' : ctx >= 100000 ? 'chip warn' : 'chip ok';
+    return {
+      hidden: false,
+      cls,
+      text: `Kontekst: ${fmtTok(ctx)}`,
+      title: `Aktuelt kontekstvindue (seneste turs input + cache): ${fmtInt(ctx)} tokens. Overvej /compact ved højt forbrug.`,
+    };
+  }
+  function contextChip(tokens, id) {
+    const p = contextChipProps(tokens);
+    return h('span', { class: p.cls, 'data-ctx': id, title: p.title, hidden: p.hidden, text: p.text });
+  }
 
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
@@ -149,6 +164,56 @@
     }
   }
 
+  function diffLineClass(line) {
+    if (line.startsWith('+') && !line.startsWith('+++')) return 'diffline add';
+    if (line.startsWith('-') && !line.startsWith('---')) return 'diffline del';
+    if (line.startsWith('@@')) return 'diffline hunk';
+    if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('commit ')) return 'diffline meta';
+    return 'diffline';
+  }
+
+  function renderDiffBlock(diffText, truncated) {
+    if (!diffText || !diffText.trim()) {
+      return h('div', { class: 'diffbox' }, h('p', { class: 'hint', text: 'Ingen synlige linjeændringer i diffet.' }));
+    }
+    const lines = diffText.replace(/\r\n/g, '\n').split('\n');
+    return h('div', { class: 'diffbox' },
+      h('pre', { class: 'diffpre' }, lines.map((line) => h('span', { class: diffLineClass(line), text: `${line}\n` }))),
+      truncated ? h('p', { class: 'hint', text: 'Diffet er afkortet, fordi det er meget stort.' }) : null);
+  }
+
+  function sumDiffItem(s, query, ...kids) {
+    const slot = h('div', { class: 'diffslot', hidden: true });
+    const btn = h('button', {
+      type: 'button', class: 'sumtoggle', 'aria-expanded': 'false',
+      onclick: async () => {
+        const open = btn.getAttribute('aria-expanded') === 'true';
+        if (open) {
+          btn.setAttribute('aria-expanded', 'false');
+          slot.hidden = true;
+          slot.replaceChildren();
+          return;
+        }
+        btn.setAttribute('aria-expanded', 'true');
+        slot.hidden = false;
+        slot.replaceChildren(h('p', { class: 'hint', text: 'Henter diff…' }));
+        try {
+          const res = await api(`/api/sessions/${s.id}/diff?${query}`);
+          if (btn.getAttribute('aria-expanded') !== 'true') return;
+          if (!res || !res.available) {
+            slot.replaceChildren(h('p', { class: 'alert', role: 'alert', text: (res && res.reason) || 'Diff kunne ikke hentes.' }));
+            return;
+          }
+          slot.replaceChildren(renderDiffBlock(res.diff, res.truncated));
+        } catch (err) {
+          if (btn.getAttribute('aria-expanded') !== 'true') return;
+          slot.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+        }
+      },
+    }, ...kids);
+    return h('li', {}, btn, slot);
+  }
+
   function summaryBody(s, r) {
     if (!r) return [h('p', { class: 'empty', text: 'Henter resumé…' })];
     if (!r.available) return [h('p', { class: 'empty', text: r.reason })];
@@ -161,13 +226,20 @@
     if (r.moved) out.push(h('p', { class: 'formnote', text: 'Der er skiftet branch, eller historikken er skrevet om, siden agenten startede. Listen kan derfor indeholde ændringer, som agenten ikke har lavet.' }));
     if (r.uncommitted) out.push(h('p', { class: 'formnote', text: 'Der ligger ændringer, som ikke er committet endnu.' }));
     if (r.commits.length) {
-      out.push(h('h3', { class: 'sumh', text: 'Commits' }), h('ul', { class: 'sumlist' }, r.commits.map((c) => h('li', {}, h('code', { text: c.sha }), ` ${c.subject}`))));
+      out.push(h('h3', { class: 'sumh', text: 'Commits' }), h('ul', { class: 'sumlist' },
+        r.commits.map((c) => sumDiffItem(s, `commit=${encodeURIComponent(c.sha)}`,
+          h('code', { text: c.sha }), h('span', { text: c.subject })))));
     }
     if (r.files.length) {
-      out.push(h('h3', { class: 'sumh', text: 'Filer' }), h('ul', { class: 'sumlist' }, r.files.map((f) => h('li', {},
-        h('span', { class: 'sumpath', text: f.path }),
-        f.isNew ? chip('ny', 'ok') : h('span', { class: 'sumnum', text: f.binary ? 'binær' : `+${f.added} −${f.removed}` }),
-        f.preexisting ? chip('fandtes eller var ændret før start', 'warn') : null))));
+      out.push(h('h3', { class: 'sumh', text: 'Filer' }), h('ul', { class: 'sumlist' }, r.files.map((f) => {
+        const badges = [
+          h('span', { class: 'sumpath', text: f.path }),
+          f.isNew ? chip('ny', 'ok') : h('span', { class: 'sumnum', text: f.binary ? 'binær' : `+${f.added} −${f.removed}` }),
+          f.preexisting ? chip('fandtes eller var ændret før start', 'warn') : null,
+        ];
+        if (f.binary) return h('li', {}, ...badges);
+        return sumDiffItem(s, `file=${encodeURIComponent(f.path)}`, ...badges);
+      })));
       if (r.fileCount > r.files.length) out.push(h('p', { class: 'hint', text: `…og ${r.fileCount - r.files.length} filer mere.` }));
     }
     out.push(h('p', { class: 'hint', text: 'Bygger på git: viser alt der er ændret i repoet, siden agenten startede – også hvis du selv eller en anden agent har ændret noget imens.' }));
@@ -177,15 +249,42 @@
   const ORDER = { venter: 0, fejlet: 1, kvote: 2, faerdig: 3, afventer: 4, arbejder: 5, afsluttet: 6 };
   const agentsIn = (list) => list.filter((s) => s.kind === 'agent').sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.startedAt - a.startedAt);
 
+  async function quickApprove(id, key, label) {
+    try {
+      await api(`/api/sessions/${id}/approve`, { method: 'POST', body: { key } });
+      state.sig = null;
+      await refresh();
+      toast(label);
+    } catch (err) { toast(err.message, true); }
+  }
+
   function deskCard(s, withRepo) {
     const st = STATUS[s.status] || STATUS.afsluttet;
     const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const quick = [];
+    if (s.exitCode == null && s.status === 'venter' && s.needsApproval) {
+      quick.push(
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qenter:${s.id}`,
+          onclick: () => quickApprove(s.id, 'enter', `Godkendte (Enter) hos ${s.name}`) }, 'Godkend (Enter)'),
+        h('button', { type: 'button', class: 'btn small', 'data-key': `qyes:${s.id}`,
+          onclick: () => quickApprove(s.id, 'yes', `Sendte Ja (y) til ${s.name}`) }, 'Ja (y)'),
+        h('button', { type: 'button', class: 'btn small danger', 'data-key': `qesc:${s.id}`,
+          onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
+      );
+    }
+    if (s.exitCode == null && s.pendingPaste) {
+      quick.push(
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qpaste:${s.id}`,
+          onclick: () => quickApprove(s.id, 'enter', `Sendte indsat tekst til ${s.name}`) }, 'Send indsat tekst (Enter)'),
+      );
+    }
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status),
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
-        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) })),
+        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
+        quick.length ? h('div', { class: 'quickactions' }, quick) : null,
         h('p', { class: 'desktokens', 'data-tokens': s.id, title: tokBreakdown(s.tokens), text: sessionTokenLine(s.tokens) }),
         s.status === 'arbejder' || s.status === 'afventer' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
       h('button', { type: 'button', class: `btn ${s.status === 'venter' ? 'primary' : ''}`, 'data-key': `desk:${s.id}`,
@@ -221,6 +320,13 @@
         const t = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
         if (n.textContent !== t) n.textContent = t;
         n.title = tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu';
+      }
+      const cp = contextChipProps(s.tokens);
+      for (const n of document.querySelectorAll(`[data-ctx="${s.id}"]`)) {
+        if (n.textContent !== cp.text) n.textContent = cp.text;
+        if (n.className !== cp.cls) n.className = cp.cls;
+        n.title = cp.title;
+        n.hidden = cp.hidden;
       }
     }
   }
@@ -1115,8 +1221,7 @@
     const exists = () => !!existingEntry();
     // Kladden huskes, så du ikke skal skrive forfra, hvis du lige skal starte en agent først.
     if (draft) { name.value = draft.name; what.value = draft.what; when.value = draft.when; }
-    const noAgent = liveAgents(repo).length ? null
-      : h('p', { class: 'formnote', text: 'Der kører ingen agent i dette repo lige nu. Start en med den grønne knap øverst – din kladde her bliver stående.' });
+    const noAgent = noAgentNote(repo);
     const sync = () => {
       const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
       if (dirWrap) dirWrap.hidden = !personal;
@@ -1125,7 +1230,7 @@
     };
     const form = h('form', { class: 'skillform', novalidate: true, 'aria-labelledby': 'skillformtitle' },
       h('h3', { id: 'skillformtitle', text: 'Ny skill' }),
-      h('p', { class: 'sub', text: 'Beskriv hvad skillen skal kunne. Teksten indsættes hos en kørende agent i dette repo, som skriver filen. Du læser den igennem og trykker Enter.' }),
+      h('p', { class: 'sub', text: 'Beskriv hvad skillen skal kunne. Teksten indsættes hos en agent i dette repo, som skriver filen. Du læser den igennem og trykker Enter.' }),
       h('label', { for: 'skillname', text: 'Navn' }), name,
       h('p', { class: 'hint', id: 'skillnamehelp', text: 'Små bogstaver, tal og bindestreg. Navnet bliver også kommandoen, fx /kunde-rapport.' }),
       h('fieldset', {}, h('legend', { text: 'Hvor skal den gælde?' }), scope('project', 'Kun dette repo', !(draft && draft.personal)), scope('personal', 'Alle mine repos (personlig)', !!(draft && draft.personal))),
@@ -1158,8 +1263,16 @@
   }
 
   // Vises hvor man kan sende noget til en agent, når der ikke kører nogen – så man ved det, før man trykker.
-  const noAgentNote = (repo) => (liveAgents(repo).length ? null
-    : h('p', { class: 'formnote', text: 'Der kører ingen agent i dette repo lige nu. Start en med knapperne øverst – så kan du sende herfra.' }));
+  function noAgentNote(repo) {
+    if (liveAgents(repo).length) return null;
+    const first = state.data && state.data.agents && state.data.agents[0];
+    return h('p', {
+      class: 'formnote',
+      text: first
+        ? `Der kører ingen agent i dette repo endnu. Trykker du på knappen, startes ${first.name} automatisk med teksten indsat.`
+        : 'Der kører ingen agent i dette repo lige nu. Start en med knapperne øverst – så kan du sende herfra.',
+    });
+  }
 
   // ---------- issues ----------
   // Husker hvilken skill du sidst brugte til issues i hvert repo (kun i denne browser).
@@ -1230,10 +1343,11 @@
       names.map((n) => h('option', { value: n, selected: n === chosen }, `/${n}`)));
     show();
     const agents = liveAgents(repo);
+    const firstAgent = state.data && state.data.agents && state.data.agents[0];
     const picker = agents.length > 1
       ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
         agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : 'Ingen agent kører i dette repo endnu' });
+      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
     panel.replaceChildren(...[
       h('div', { class: 'panelbar' }, back, picker),
       h('h3', { class: 'plain' }, `#${issue.number} ${issue.title} `, issue.labels.map((l) => chip(l))),
@@ -1288,7 +1402,27 @@
 
   async function sendToAgent(text, done) {
     const agents = liveAgents(state.repo);
-    if (!agents.length) { toast('Start en agent i dette repo først med knapperne øverst – så kan teksten sendes til den.', true); return false; }
+    if (!agents.length) {
+      if (!state.data || !state.data.agents || !state.data.agents.length) {
+        toast('Start en agent i dette repo først med knapperne øverst – så kan teksten sendes til den.', true);
+        return false;
+      }
+      const first = state.data.agents[0];
+      try {
+        const s = await api('/api/sessions', { method: 'POST', body: { repo: state.repo, kind: 'agent', agentId: first.id, initialPaste: text } });
+        state.sig = null;
+        await refresh();
+        state.view = `term:${s.id}`;
+        syncUrl(false);
+        renderTabs();
+        renderPanel();
+        toast(`Startede ${first.name} og indsatte teksten. Tryk Enter i terminalen for at sende.`);
+        return true;
+      } catch (err) {
+        toast(err.message, true);
+        return false;
+      }
+    }
     const target = agents.find((a) => a.id === state.target) || agents[0];
     try {
       await api(`/api/sessions/${target.id}/paste`, { method: 'POST', body: { text } });
@@ -1328,10 +1462,11 @@
       ...pr.comments.map((c) => ({ kind: 'Kommentar', author: c.author, body: c.body, at: c.at })),
     ].filter((it) => it.body && it.body.trim());
     const agents = liveAgents(repo);
+    const firstAgent = state.data && state.data.agents && state.data.agents[0];
     const picker = agents.length > 1
       ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
         agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : 'Ingen agent kører i dette repo endnu' });
+      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
     const dec = DECISION[pr.decision];
     panel.replaceChildren(...[
       h('div', { class: 'panelbar' }, back, picker),
@@ -1451,7 +1586,11 @@
   function termStatus(s) {
     if (s.kind !== 'agent') return [sessionBadge(s)];
     const txt = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
-    return [sessionBadge(s), h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt })];
+    return [
+      sessionBadge(s),
+      h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt }),
+      contextChip(s.tokens, s.id),
+    ];
   }
 
   function termPanel(panel, id) {
