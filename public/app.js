@@ -24,6 +24,7 @@
 
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
+    afventer: { label: 'Venter på andet', cls: 'extwait', glyph: '◷' },
     venter: { label: 'Venter på dig', cls: 'wait', glyph: '◐' },
     aaben: { label: 'Åben', cls: 'open', glyph: '▪' },
     afsluttet: { label: 'Afsluttet', cls: 'done', glyph: '✓' },
@@ -34,10 +35,13 @@
     REVIEW_REQUIRED: ['Afventer review', 'wait'], COMMENTED: ['Kommenteret', 'open'], DISMISSED: ['Afvist', 'done'],
   };
 
-  function badge(status) {
+  function badge(status, waitingFor, waitingDetail) {
     const s = STATUS[status] || STATUS.afsluttet;
-    return h('span', { class: `badge ${s.cls}` }, h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), s.label);
+    const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}` : s.label;
+    return h('span', { class: `badge ${s.cls}`, title: status === 'afventer' && waitingDetail ? waitingDetail : null },
+      h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), label);
   }
+  const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail);
   const SVG = 'http://www.w3.org/2000/svg';
   function sv(tag, attrs, ...kids) {
     const n = document.createElementNS(SVG, tag);
@@ -49,7 +53,7 @@
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
   function robot(status, mini) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
-    const mark = { wait: '?', fail: '!', done: 'z' }[st];
+    const mark = { wait: '?', extwait: '…', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
       sv('rect', { class: 'desk', x: 8, y: 70, width: 104, height: 5, rx: 2.5 }),
       sv('rect', { class: 'lapbase', x: 62, y: 67, width: 40, height: 3, rx: 1.5 }),
@@ -77,13 +81,15 @@
   }
   function timeText(s) {
     if (s.endedAt) return `sluttede ${ago(s.endedAt)}`;
-    if (s.status === 'venter') return `har ventet i ${dur(s.lastOutputAt)}`;
+    if (s.status === 'venter' || s.status === 'afventer') return `har ventet i ${dur(s.lastOutputAt)}`;
     return `har arbejdet i ${dur(s.startedAt)}`;
   }
   function bubbleText(s) {
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
-    return s.lastLine || { arbejder: 'Går i gang…', venter: 'Venter på dit svar', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
+    if (s.lastLine) return s.lastLine;
+    if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
+    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -99,7 +105,7 @@
   function loadSummaries() {
     if (!state.data) return;
     for (const s of state.data.sessions) {
-      if (s.kind !== 'agent' || s.status === 'arbejder') continue;
+      if (s.kind !== 'agent' || s.status === 'arbejder' || s.status === 'afventer') continue;
       const have = state.summary[s.id];
       if (have && have.status === s.status) continue;
       state.summary[s.id] = { status: s.status, data: have ? have.data : null };
@@ -137,19 +143,19 @@
     return out;
   }
 
-  const ORDER = { venter: 0, fejlet: 1, arbejder: 2, afsluttet: 3 };
+  const ORDER = { venter: 0, fejlet: 1, afventer: 2, arbejder: 3, afsluttet: 4 };
   const agentsIn = (list) => list.filter((s) => s.kind === 'agent').sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.startedAt - a.startedAt);
 
   function deskCard(s, withRepo) {
     const st = STATUS[s.status] || STATUS.afsluttet;
-    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status),
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
-        h('p', { class: 'deskstatus' }, badge(s.status), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) })),
+        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) })),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
-        s.status === 'arbejder' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
+        s.status === 'arbejder' || s.status === 'afventer' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
       h('button', { type: 'button', class: `btn ${s.status === 'venter' ? 'primary' : ''}`, 'data-key': `desk:${s.id}`,
         'aria-label': `${action}: ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, action));
   }
@@ -289,11 +295,14 @@
     const w = agents.filter((s) => s.status === 'venter');
     const f = agents.filter((s) => s.status === 'fejlet');
     const k = agents.filter((s) => s.status === 'arbejder');
+    const ew = agents.filter((s) => s.status === 'afventer');
     let text = '';
     if (w.length === 1) text = `(1) ${pickStable(FUN.titleWait, w[0].id)}`;
     else if (w.length > 1) text = `(${w.length}) ${w.length} ${pickStable(FUN.titleWaitMany, w[0].id)}`;
     else if (f.length) text = `(!) ${pickStable(FUN.titleFail, f[0].id)}`;
     else if (k.length) text = `${k.length} ${pickStable(k.length === 1 ? FUN.titleWork : FUN.titleWorkMany, k[0].id)}`;
+    else if (ew.length === 1) text = `Venter på ${ew[0].waitingFor || 'andet'}`;
+    else if (ew.length > 1) text = `${ew.length} agenter venter på andet`;
     return text ? `${text} · Control Tower` : 'Control Tower';
   }
 
@@ -359,7 +368,7 @@
       // prev === null: siden er lige åbnet. En agent vi aldrig har set før, er startet siden sidst – går den ned
       // med det samme, skal det også give en besked.
       if (!prev || prev[s.id] === s.status) continue;
-      if (s.status === 'venter' && (prev[s.id] === 'arbejder' || prev[s.id] === undefined)) notify(s, 'venter');
+      if (s.status === 'venter' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'venter');
       else if (s.status === 'fejlet') notify(s, 'fejlet');
       else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id)) notify(s, 'afsluttet');
     }
@@ -392,7 +401,7 @@
     }
     // Tegn kun om, når noget faktisk har ændret sig – ellers ville tastaturfokus forsvinde hvert 3. sekund.
     const sig = JSON.stringify([state.offline, state.locked, state.data && state.data.repos, state.data && state.data.skipped,
-      state.data && state.data.sessions.map((x) => [x.id, x.status, x.pendingPaste])]);
+      state.data && state.data.sessions.map((x) => [x.id, x.status, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
     loadSummaries();
     if (sig === state.sig) { updateLiveText(); return; }
     state.sig = sig;
@@ -412,7 +421,7 @@
   }
 
   const sessionsFor = (repo) => (state.data ? state.data.sessions.filter((s) => s.repo === repo) : []);
-  const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && (s.status === 'arbejder' || s.status === 'venter'));
+  const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && (s.status === 'arbejder' || s.status === 'venter' || s.status === 'afventer'));
 
   // ---------- topbar + sidebar ----------
   function renderChrome() {
@@ -426,15 +435,17 @@
     $('root').textContent = d.root;
     $('root').title = d.root;
     const working = d.sessions.filter((s) => s.status === 'arbejder').length;
+    const extWaiting = d.sessions.filter((s) => s.status === 'afventer').length;
     const waiting = d.sessions.filter((s) => s.status === 'venter').length;
     const dirty = d.repos.filter((r) => r.changed + r.untracked > 0).length;
     document.title = tabTitle(d.sessions);
-    $('summary').replaceChildren(
+    $('summary').replaceChildren(...[
       h('li', {}, h('strong', { text: String(d.repos.length) }), ' repos'),
       h('li', {}, h('strong', { text: String(dirty) }), ' med ændringer'),
       h('li', { class: working ? 'work' : '' }, h('strong', { text: String(working) }), ' arbejder'),
-      h('li', { class: waiting ? 'wait' : '' }, h('strong', { text: String(waiting) }), ' venter'),
-    );
+      extWaiting ? h('li', { class: 'extwait' }, h('strong', { text: String(extWaiting) }), ' venter på andet') : null,
+      h('li', { class: waiting ? 'wait' : '' }, h('strong', { text: String(waiting) }), ' venter på dig'),
+    ].filter(Boolean));
     const f = state.filter.trim().toLowerCase();
     const repos = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
     const cur = (el, on) => { if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
@@ -451,7 +462,7 @@
       h('span', { class: 'repometa' },
         h('span', { class: 'branch', text: r.detached ? `commit ${r.oid || '?'}` : r.branch || 'ingen branch' }),
         n ? h('span', { class: 'dirty', text: `${n} ændr.` }) : null),
-      ss.length ? h('span', { class: 'repodots' }, ss.map((s) => badge(s.status))) : null));
+      ss.length ? h('span', { class: 'repodots' }, ss.map(sessionBadge)) : null));
     }));
     if (!repos.length) $('repolist').append(h('li', { class: 'hint', text: f ? 'Ingen repos matcher filteret.' : 'Ingen git-repos fundet i mappen.' }));
     $('skipped').textContent = d.error ? d.error : (d.skipped ? `${d.skipped} mappe${d.skipped === 1 ? '' : 'r'} uden git vises ikke.` : '');
@@ -512,7 +523,7 @@
     const exists = state.data.repos.some((r) => r.name === state.repo);
     const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
     const nodes = list.map(([id, label]) => tabButton(id, label));
-    for (const s of sessionsFor(state.repo)) nodes.push(tabButton(`term:${s.id}`, s.name, badge(s.status)));
+    for (const s of sessionsFor(state.repo)) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
     const key = focusKey();
     tabs.replaceChildren(...nodes);
     refocus(key);
@@ -558,7 +569,7 @@
         if (det && det.dataset.status !== s.status) {
           const was = det.dataset.status;
           det.dataset.status = s.status;
-          if (was === 'arbejder' && s.status !== 'arbejder') det.open = true;
+          if ((was === 'arbejder' || was === 'afventer') && s.status !== 'arbejder' && s.status !== 'afventer') det.open = true;
         }
       }
     }
@@ -567,7 +578,7 @@
   // ---------- dashboard ----------
   function sessionRow(s, withRepo) {
     return h('li', { class: 'srow' },
-      badge(s.status),
+      sessionBadge(s),
       h('span', { class: 'sname' }, withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name),
       h('span', { class: 'stime', text: s.endedAt ? `sluttede ${ago(s.endedAt)}` : `startet ${ago(s.startedAt)}` }),
       h('button', { type: 'button', class: 'btn small', 'data-key': `show:${s.id}`, 'aria-label': `Vis ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, 'Vis'));
@@ -579,7 +590,8 @@
     const waiting = agents.filter((s) => s.status === 'venter');
     const failed = agents.filter((s) => s.status === 'fejlet');
     const working = agents.filter((s) => s.status === 'arbejder');
-    const jump = (s, label) => h('button', { type: 'button', class: 'btn primary', 'data-key': `next:${s.id}`, onclick: () => go(s.repo, `term:${s.id}`) }, label);
+    const extWaiting = agents.filter((s) => s.status === 'afventer');
+    const jump = (s, label, primary = true) => h('button', { type: 'button', class: `btn${primary ? ' primary' : ''}`, 'data-key': `next:${s.id}`, onclick: () => go(s.repo, `term:${s.id}`) }, label);
     if (waiting.length) {
       return h('div', { class: 'next wait' }, h('div', {},
         h('p', { class: 'nexttitle', text: waiting.length === 1 ? 'En agent venter på dig' : `${waiting.length} agenter venter på dig` }),
@@ -592,10 +604,24 @@
         h('p', { class: 'nextsub', text: `${failed[0].name} i ${failed[0].repo}.` })),
       jump(failed[0], 'Se fejlen'));
     }
+    if (working.length && extWaiting.length) {
+      return h('div', { class: 'next work' }, h('div', {},
+        h('p', { class: 'nexttitle', text: `${working.length + extWaiting.length} agenter er i gang` }),
+        h('p', { class: 'nextsub', text: `${extWaiting[0].name} i ${extWaiting[0].repo} venter på ${extWaiting[0].waitingFor || 'andet'}. Du behøver ikke gøre noget lige nu.` })));
+    }
     if (working.length) {
       return h('div', { class: 'next work' }, h('div', {},
         h('p', { class: 'nexttitle', text: working.length === 1 ? 'En agent arbejder' : `${working.length} agenter arbejder` }),
         h('p', { class: 'nextsub', text: 'Du behøver ikke gøre noget lige nu. Fanens titel viser, når en agent venter på dig.' })));
+    }
+    if (extWaiting.length) {
+      const one = extWaiting.length === 1;
+      return h('div', { class: 'next extwait' }, h('div', {},
+        h('p', { class: 'nexttitle', text: one ? `Venter på ${extWaiting[0].waitingFor || 'andet'}` : `${extWaiting.length} agenter venter på andet` }),
+        h('p', { class: 'nextsub', text: one
+          ? `${extWaiting[0].name} i ${extWaiting[0].repo} venter ikke på dig lige nu.${extWaiting[0].waitingDetail ? ` (${extWaiting[0].waitingDetail})` : ''}`
+          : 'Agenterne venter på tests, subagenter eller andre opgaver – ikke på dig.' })),
+      jump(extWaiting[0], 'Følg med', false));
     }
     // Også når ingen arbejder, er der en agent at se på: den sover ved sit skrivebord, indtil du starter en.
     return h('div', { class: 'next idle' }, robot('afsluttet'), h('div', { class: 'nextbody' },
@@ -637,7 +663,7 @@
           r.behind ? chip(`${r.behind} bagud`, 'warn') : null,
           r.brainFiles ? chip(`Hjerne: ${r.brainFiles} filer`) : chip('Ingen hjerne', 'muted')),
         h('span', { class: 'cardfoot', text: r.lastCommit ? `${r.lastCommit.subject} · ${ago(r.lastCommit.time)}` : 'Ingen commits endnu' }),
-        ss.length ? h('span', { class: 'cardrow' }, ss.map((s) => badge(s.status))) : null,
+        ss.length ? h('span', { class: 'cardrow' }, ss.map(sessionBadge)) : null,
         h('span', { class: 'cardactions' },
           h('button', { type: 'button', class: 'btn small', 'data-key': `card:${r.name}`, 'aria-label': `Åbn ${r.name}`, onclick: () => go(r.name, 'overview') }, 'Åbn'),
           first ? h('button', { type: 'button', class: 'btn small primary', 'data-key': `cardstart:${r.name}`, 'aria-label': `Start ${first.name} i ${r.name}`, onclick: () => start('agent', first.id, r.name) }, `Start ${first.name}`) : null));
@@ -1123,14 +1149,14 @@
       ? [confirmButton('Stop', 'Tryk igen for at stoppe', 'danger', () => removeSession(s.id, false))]
       : [again, h('button', { type: 'button', class: 'btn small', onclick: () => removeSession(s.id, true) }, 'Fjern fra listen')].filter(Boolean)));
     const hint = $('termhint');
-    if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« = ingen aktivitet i ${state.data.idleSeconds} sek. · F6 forlader terminalen` : 'F6 forlader terminalen';
+    if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
     // Knapper der kun giver mening mens agenten kører, vises ikke bagefter.
     const ask = $('askbox');
     if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé')] : []));
     if (hadFocus) { const b = box.querySelector('button'); if (b) b.focus(); }
   }
 
-  const termStatus = (s) => [badge(s.status)];
+  const termStatus = (s) => [sessionBadge(s)];
 
   function termPanel(panel, id) {
     const s = state.data.sessions.find((x) => x.id === id);
@@ -1146,7 +1172,7 @@
         h('span', { class: 'hint', id: 'termhint' }),
         h('span', { id: 'askbox' }),
         h('span', { id: 'termbuttons', class: 'termbuttons' })),
-      s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: s.status !== 'arbejder' },
+      s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: s.status !== 'arbejder' && s.status !== 'afventer' },
         h('summary', { text: 'Resumé: hvad er der sket siden start' }),
         h('div', { 'data-sumbox': s.id, tabindex: '0', role: 'region', 'aria-label': 'Resumé' }, summaryBody(s, state.summary[s.id] && state.summary[s.id].data))) : null,
       t.host);

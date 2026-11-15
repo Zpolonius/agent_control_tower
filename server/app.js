@@ -72,7 +72,10 @@ function createApp({ config, token }) {
     if (!sec.authed(req, token)) return fail(res, 401, 'Ikke logget ind');
 
     if (req.method === 'GET' && route === '/api/state') {
-      const data = await scanner.scan(url.searchParams.get('fresh') === '1');
+      const [data] = await Promise.all([
+        scanner.scan(url.searchParams.get('fresh') === '1'),
+        sessions.refreshWaits(),
+      ]);
       return send(res, 200, {
         root: config.root, host: sessions.hostname, idleSeconds: config.idleSeconds,
         agents: config.agents.map((a) => ({ id: a.id, name: a.name })), personalSkillsDir: config.personalSkillsDir,

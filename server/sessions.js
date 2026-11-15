@@ -4,6 +4,7 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
+const { createWaitChecker } = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -44,23 +45,36 @@ function lastLine(buffer, errorsFirst) {
   return lines.length ? short(lines[lines.length - 1]) : '';
 }
 
-function createSessions(config) {
+function createSessions(config, { waitChecker = createWaitChecker() } = {}) {
   const sessions = new Map();
+
+  const isIdleAgent = (s) => s.exitCode == null && s.kind === 'agent' && Date.now() - s.lastOutputAt >= config.idleSeconds * 1000;
+  const currentWait = (s) => (isIdleAgent(s) ? waitChecker.checkSync(s) : null);
 
   function status(s) {
     if (s.exitCode != null) return s.exitCode === 0 || s.killed ? 'afsluttet' : 'fejlet';
     if (s.kind === 'shell') return 'aaben';
-    return Date.now() - s.lastOutputAt < config.idleSeconds * 1000 ? 'arbejder' : 'venter';
+    if (!isIdleAgent(s)) return 'arbejder';
+    return currentWait(s) ? 'afventer' : 'venter';
   }
 
   function view(s) {
+    const st = status(s);
+    const wait = st === 'afventer' ? currentWait(s) : null;
     return {
       id: s.id, repo: s.repo, kind: s.kind, agentId: s.agentId, name: s.name,
       startedAt: s.startedAt, lastOutputAt: s.lastOutputAt, endedAt: s.endedAt,
-      exitCode: s.exitCode, status: status(s),
+      exitCode: s.exitCode, status: st,
+      waitingFor: wait ? wait.waitingFor : null,
+      waitingDetail: wait ? wait.detail : null,
       lastLine: s.kind === 'agent' ? lastLine(s.buffer, s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
       pendingPaste: s.pendingPaste,
     };
+  }
+
+  async function refreshWaits() {
+    const idle = [...sessions.values()].filter(isIdleAgent);
+    if (idle.length) await waitChecker.checkAll(idle);
   }
 
   // Flere sessioner af samme slags i samme repo får et nummer, så de kan kendes fra hinanden.
@@ -87,13 +101,16 @@ function createSessions(config) {
       agentId: kind === 'agent' ? agent.id : null,
       name: numbered(kind === 'agent' ? agent.name : 'Terminal', repo, kind === 'agent' ? agent.id : null),
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
-      exitCode: null, killed: false, bracketed: false, pendingPaste: false, buffer: '', clients: new Set(), proc,
+      exitCode: null, killed: false, bracketed: false, pendingPaste: false, waitState: null, buffer: '', clients: new Set(), proc,
     };
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
       // Ingen af delene tæller som at agenten arbejder.
       const t = Date.now();
-      if (t - s.lastInputAt > 400 && t - s.lastResizeAt > 600) s.lastOutputAt = t;
+      if (t - s.lastInputAt > 400 && t - s.lastResizeAt > 600) {
+        s.lastOutputAt = t;
+        s.waitState = null;
+      }
       s.buffer += data;
       // Husk om programmet har slået "indsæt-tilstand" til (bruges af paste nedenfor).
       const on = s.buffer.lastIndexOf('\x1b[?2004h');
@@ -200,7 +217,7 @@ function createSessions(config) {
   function forceAll() { for (const s of sessions.values()) { s.killed = true; signal(s, 'SIGKILL'); } }
   const running = () => [...sessions.values()].filter((s) => s.exitCode == null).length;
 
-  return { create, get, attach, paste, remove, closeAll, forceAll, running, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
+  return { create, get, attach, paste, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
 }
 
 module.exports = { createSessions, lastLine, PASTE_MAX };
