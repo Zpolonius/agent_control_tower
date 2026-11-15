@@ -325,7 +325,7 @@ test('pull requests: læser reviews via gh, og forklarer når gh mangler', async
     reviews: [{ author: { login: 'rev' }, state: 'CHANGES_REQUESTED', body: 'Ret <script>alert(1)</script> validering', submittedAt: '2026-11-14T09:00:00Z' }, { author: { login: 'rev' }, state: 'COMMENTED', body: '' }],
     comments: [{ author: { login: 'bot' }, body: 'CI fejlede', createdAt: '2026-11-14T09:30:00Z' }] });
   const inline = JSON.stringify([{ user: { login: 'rev' }, path: 'src/a.js', line: 12, diff_hunk: '@@ -10,3 +10,4 @@\n+test', body: 'Mangler null-tjek', created_at: '2026-11-14T09:01:00Z' }]);
-  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1 $2" in\n "pr list") echo '${list}';;\n "pr view") echo '${view}';;\n "api "*) echo '${inline}';;\nesac\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1 $2" in\n "pr list") printf '%s\\n' '${list}';;\n "pr view") printf '%s\\n' '${view}';;\n "api "*) printf '%s\\n' '${inline}';;\nesac\n`, { mode: 0o755 });
   if (process.platform === 'win32') {
     const jsPath = path.join(bin, 'gh-mock.js');
     fs.writeFileSync(jsPath, `'use strict';
