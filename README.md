@@ -69,9 +69,9 @@ Fanen Issues viser repoets åbne GitHub-issues (via `gh`). Åbn et issue, og sen
 
 ## Skills
 
-Fanen Skills i et repo viser repoets egne skills (`.claude/skills` og ældre `.claude/commands`) og dine personlige (`~/.claude/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget, fordi Claude Code bruger den personlige.
+Fanen Skills i et repo viser repoets egne skills (`.claude/skills`, `.gemini/skills`, `.agents/skills` samt ældre `.claude/commands` / `.gemini/commands`) og dine personlige (`~/.claude/skills`, `~/.gemini/skills`, `~/.agents/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget.
 
-Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Stien til personlige skills kan ændres med `personalSkillsDir` i indstillingsfilen.
+Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Stierne til dine personlige skills kan ændres eller udvides med `personalSkillsDirs` (en liste af mapper) eller `personalSkillsDir` i `control-tower.config.json`.
 
 ## Token-regnskab
 

@@ -877,11 +877,22 @@
   // ---------- skills ----------
   const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+  function personalDirLabel(dir) {
+    if (!dir) return '';
+    if (/[/\\]\.claude([/\\]skills)?$/i.test(dir)) return `Claude (${dir})`;
+    if (/[/\\]\.gemini([/\\]skills)?$/i.test(dir)) return `Gemini (${dir})`;
+    if (/[/\\]\.agents([/\\]skills)?$/i.test(dir)) return `Delt (${dir})`;
+    return dir;
+  }
+
   function skillCard(sk, repo, onOpen, shadowed) {
+    const multiPersonal = state.data && Array.isArray(state.data.personalSkillsDirs) && state.data.personalSkillsDirs.length > 1;
+    const showDirChip = sk.dirLabel && (sk.scope === 'project' || multiPersonal);
     return h('li', {}, h('button', { type: 'button', class: 'skillrow', onclick: () => onOpen(sk, repo) },
       h('span', { class: 'skillname', text: `/${sk.name}` }),
       h('span', { class: 'skilldesc', text: sk.description || 'Ingen beskrivelse – agenten ved ikke, hvornår den skal bruge denne skill.' }),
       h('span', { class: 'cardrow' },
+        showDirChip ? chip(sk.dirLabel, 'muted') : null,
         sk.source === 'synced' ? chip('Synkroniseret fra claude.ai', 'muted') : null,
         sk.source === 'command' ? chip('Ældre kommando', 'muted') : null,
         sk.manualOnly ? chip('Kun når du selv kalder den', 'muted') : null,
@@ -891,8 +902,8 @@
   function skillPrompt({ name, scope, repo, what, when, exists, dir }) {
     const where = scope === 'personal' ? `${dir}/${name}/SKILL.md (personlig skill, gælder alle mine repos)` : `.claude/skills/${name}/SKILL.md i dette repo (${repo})`;
     const lines = exists
-      ? [`Forbedr den eksisterende Claude Code-skill "${name}" i ${where}.`, 'Læs filen først, og bevar det der allerede virker. Vis mig ændringerne, før du gemmer.']
-      : [`Opret en ny Claude Code-skill med navnet "${name}" i ${where}.`, 'Findes mappen eller filen allerede, så stop og spørg mig – overskriv ikke noget.'];
+      ? [`Forbedr den eksisterende skill "${name}" i ${where}.`, 'Læs filen først, og bevar det der allerede virker. Vis mig ændringerne, før du gemmer.']
+      : [`Opret en ny skill med navnet "${name}" i ${where}.`, 'Findes mappen eller filen allerede, så stop og spørg mig – overskriv ikke noget.'];
     lines.push('', `Det skal skillen kunne: ${what.trim()}`);
     if (when.trim()) lines.push(`Den skal bruges når: ${when.trim()}`);
     lines.push('', 'Krav: filen starter med YAML-frontmatter med name og description. Beskrivelsen skal starte med det vigtigste brugstilfælde og sige hvornår skillen skal bruges. Hold instruktionerne korte og konkrete (under 500 linjer). Vis mig den færdige fil til sidst.');
@@ -947,10 +958,13 @@
       return;
     }
     if (!still()) return;
+    const scopeInfo = f.scope === 'personal'
+      ? `Personlig skill${f.dirLabel ? ` · ${f.dirLabel}` : ''}`
+      : `Skill i ${sel.repo}${f.dirLabel ? ` · ${f.dirLabel}` : ''}`;
     panel.replaceChildren(
       h('div', { class: 'panelbar' }, back),
       h('h3', { class: 'plain', text: `/${f.name}` }),
-      h('p', { class: 'sub', text: `${f.scope === 'personal' ? 'Personlig skill' : `Skill i ${sel.repo}`} · ${f.id} · ændret ${ago(f.mtime)}${f.truncated ? ' · viser kun starten' : ''}` }),
+      h('p', { class: 'sub', text: `${scopeInfo} · ${f.id.replace(/^\d+:/, '')} · ændret ${ago(f.mtime)}${f.truncated ? ' · viser kun starten' : ''}` }),
       h('p', { class: 'skillwhen' }, h('strong', { text: 'Bruges når: ' }), f.description || 'Ingen beskrivelse.'),
       h('article', { class: 'brainview' }, window.renderMarkdown(f.content)));
   }
@@ -962,19 +976,34 @@
     const when = h('input', { id: 'skillwhen', type: 'text', maxlength: '500', placeholder: 'Fx: når jeg beder om "ugens status"' });
     const scope = (value, label, checked) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'skillscope', value, checked }), label);
     const button = h('button', { type: 'submit', class: 'btn primary' }, 'Send til agent');
-    const exists = () => {
+    const draft = state.skillDraft[repo];
+    const personalDirs = (state.data && Array.isArray(state.data.personalSkillsDirs) && state.data.personalSkillsDirs.length)
+      ? state.data.personalSkillsDirs
+      : (state.data && state.data.personalSkillsDir ? [state.data.personalSkillsDir] : []);
+    const dirSelect = personalDirs.length > 1
+      ? h('select', { id: 'skilldir' }, personalDirs.map((d) => h('option', { value: d, selected: draft && draft.dir === d }, personalDirLabel(d))))
+      : null;
+    const dirWrap = dirSelect
+      ? h('div', { id: 'skilldirwrap', hidden: !(draft && draft.personal) }, h('label', { for: 'skilldir', text: 'Personlig mappe' }), dirSelect)
+      : null;
+    const selectedPersonalDir = () => (dirSelect ? dirSelect.value : personalDirs[0] || state.data.personalSkillsDir);
+    const existingEntry = () => {
       const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
       const pool = personal ? data.personal.filter((s) => s.source !== 'synced') : data.project.filter((s) => s.source === 'skill');
-      return pool.some((s) => s.name === name.value.trim());
+      const targetName = name.value.trim();
+      if (!personal) return pool.find((s) => s.name === targetName) || null;
+      return pool.find((s) => s.name === targetName && s.dir === selectedPersonalDir()) || pool.find((s) => s.name === targetName) || null;
     };
+    const exists = () => !!existingEntry();
     // Kladden huskes, så du ikke skal skrive forfra, hvis du lige skal starte en agent først.
-    const draft = state.skillDraft[repo];
     if (draft) { name.value = draft.name; what.value = draft.what; when.value = draft.when; }
     const noAgent = liveAgents(repo).length ? null
       : h('p', { class: 'formnote', text: 'Der kører ingen agent i dette repo lige nu. Start en med den grønne knap øverst – din kladde her bliver stående.' });
     const sync = () => {
+      const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
+      if (dirWrap) dirWrap.hidden = !personal;
       button.textContent = exists() ? 'Bed agenten forbedre den' : 'Send til agent';
-      state.skillDraft[repo] = { name: name.value, what: what.value, when: when.value, personal: document.querySelector('input[name="skillscope"]:checked').value === 'personal' };
+      state.skillDraft[repo] = { name: name.value, what: what.value, when: when.value, personal, dir: selectedPersonalDir() };
     };
     const form = h('form', { class: 'skillform', novalidate: true, 'aria-labelledby': 'skillformtitle' },
       h('h3', { id: 'skillformtitle', text: 'Ny skill' }),
@@ -982,10 +1011,12 @@
       h('label', { for: 'skillname', text: 'Navn' }), name,
       h('p', { class: 'hint', id: 'skillnamehelp', text: 'Små bogstaver, tal og bindestreg. Navnet bliver også kommandoen, fx /kunde-rapport.' }),
       h('fieldset', {}, h('legend', { text: 'Hvor skal den gælde?' }), scope('project', 'Kun dette repo', !(draft && draft.personal)), scope('personal', 'Alle mine repos (personlig)', !!(draft && draft.personal))),
+      dirWrap,
       h('label', { for: 'skillwhat', text: 'Hvad skal den kunne?' }), what,
       h('label', { for: 'skillwhen', text: 'Hvornår skal agenten bruge den? (valgfrit)' }), when,
       noAgent, err, button);
     form.addEventListener('input', sync);
+    form.addEventListener('change', sync);
     if (draft) queueMicrotask(() => { if (form.isConnected) sync(); });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1000,7 +1031,9 @@
       for (const el of [name, what]) { if (el === bad) el.setAttribute('aria-invalid', 'true'); else el.removeAttribute('aria-invalid'); }
       if (bad) { bad.focus(); return; }
       const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
-      sendToAgent(skillPrompt({ name: n, scope: personal ? 'personal' : 'project', repo, what: what.value, when: when.value, exists: exists(), dir: state.data.personalSkillsDir }),
+      const found = existingEntry();
+      const targetDir = (personal && found && found.dir) ? found.dir : selectedPersonalDir();
+      sendToAgent(skillPrompt({ name: n, scope: personal ? 'personal' : 'project', repo, what: what.value, when: when.value, exists: !!found, dir: targetDir }),
         'Beskrivelsen er indsat hos agenten. Læs den igennem, og tryk Enter for at sende.').then((ok) => { if (ok) delete state.skillDraft[repo]; });
     });
     return form;
