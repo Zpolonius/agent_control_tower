@@ -1,12 +1,24 @@
 'use strict';
-// Skills til Claude Code: små instruktionsfiler (SKILL.md) som agenten kan bruge.
-// Projekt-skills ligger i repoets .claude-mappe, personlige i din hjemmemappe.
+// Skills til Claude Code og Gemini/Antigravity: små instruktionsfiler (SKILL.md) som agenten kan bruge.
+// Projekt-skills ligger i repoets .claude-, .gemini- eller .agents-mappe; personlige i dine valgte skill-mapper.
 // Control Tower læser dem kun. Nye skills skrives af en agent, ikke af Control Tower.
 const fs = require('node:fs');
 const path = require('node:path');
 
 const MAX_BYTES = 256 * 1024;
 const MAX_SKILLS = 300;
+
+function labelForPersonalDir(dir) {
+  if (/[/\\]\.claude([/\\]skills)?$/i.test(dir)) return 'Claude (~/.claude/skills)';
+  if (/[/\\]\.gemini([/\\]skills)?$/i.test(dir)) return 'Gemini (~/.gemini/skills)';
+  if (/[/\\]\.agents([/\\]skills)?$/i.test(dir)) return 'Delt (~/.agents/skills)';
+  const base = path.basename(dir);
+  if (/^skills$/i.test(base)) {
+    const parent = path.basename(path.dirname(dir));
+    return parent ? `${parent}/skills` : base;
+  }
+  return base || dir;
+}
 
 function parseFrontmatter(text) {
   const m = text.match(/^---[ \t]*\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/);
@@ -35,29 +47,39 @@ function readCapped(file) {
 }
 
 function createSkills(config) {
+  function personalDirs() {
+    if (Array.isArray(config.personalSkillsDirs) && config.personalSkillsDirs.length) return config.personalSkillsDirs;
+    return config.personalSkillsDir ? [config.personalSkillsDir] : [];
+  }
+
   // base = mappen der ledes i. Filer der (via symlinks) ender uden for base, springes over.
-  function collect(base, scope, patterns) {
+  function collectOne(base, scope, patterns, { idPrefix = '', dir = base, dirLabel = null, seen = new Set(), out = [] } = {}) {
     let realBase;
-    try { realBase = fs.realpathSync(base); } catch { return []; }
-    const out = [];
-    const dirs = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
+    try { realBase = fs.realpathSync(base); } catch { return out; }
+    const dirs = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }); } catch { return []; } };
     function add(abs, source, fallbackName) {
       if (out.length >= MAX_SKILLS) return;
       let real, st;
       try { real = fs.realpathSync(abs); st = fs.statSync(real); } catch { return; }
-      if (!st.isFile() || !(real.startsWith(realBase + path.sep))) return;
+      if (!st.isFile() || !(real.startsWith(realBase + path.sep)) || seen.has(real)) return;
       let parsed;
       try { parsed = parseFrontmatter(readCapped(real).text); } catch { return; }
+      seen.add(real);
       const flag = (v) => /^(true|yes|on|1)$/i.test(String(v || ''));
+      const rel = path.relative(realBase, real).split(path.sep).join('/');
       out.push({
-        id: path.relative(realBase, real).split(path.sep).join('/'),
-        name: (parsed.meta.name || fallbackName).slice(0, 100),
-        description: `${parsed.meta.description || ''}${parsed.meta.when_to_use ? ` ${parsed.meta.when_to_use}` : ''}`.trim().slice(0, 1600),
-        scope, source, manualOnly: flag(parsed.meta['disable-model-invocation']), mtime: st.mtimeMs,
+        realFile: real,
+        entry: {
+          id: `${idPrefix}${rel}`,
+          name: (parsed.meta.name || fallbackName).slice(0, 100),
+          description: `${parsed.meta.description || ''}${parsed.meta.when_to_use ? ` ${parsed.meta.when_to_use}` : ''}`.trim().slice(0, 1600),
+          scope, source, manualOnly: flag(parsed.meta['disable-model-invocation']), mtime: st.mtimeMs,
+          dir, dirLabel,
+        },
       });
     }
     for (const p of patterns) p({ realBase, dirs, add });
-    return out.sort((a, b) => a.name.localeCompare(b.name, 'da'));
+    return out;
   }
 
   const skillDirs = (sub, source, depth) => ({ realBase, dirs, add }) => {
@@ -84,19 +106,48 @@ function createSkills(config) {
     }
   };
 
-  const project = (repoDir) => collect(path.join(repoDir, '.claude'), 'project', [skillDirs('skills', 'skill', 0), commandFiles]);
-  const personal = () => collect(config.personalSkillsDir, 'personal', [skillDirs('', 'skill', 0), skillDirs('synced', 'synced', 1)]);
-
-  // Kun filer der står på listen kan læses – så kan der ikke hentes andet fra fx ~/.claude.
-  function read(scope, repoDir, id) {
-    const base = scope === 'personal' ? config.personalSkillsDir : path.join(repoDir, '.claude');
-    const entry = (scope === 'personal' ? personal() : project(repoDir)).find((s) => s.id === id);
-    if (!entry) return null;
-    const { text, truncated } = readCapped(path.join(fs.realpathSync(base), ...entry.id.split('/')));
-    return { ...entry, truncated, content: parseFrontmatter(text).body };
+  function collectProject(repoDir) {
+    const seen = new Set();
+    const out = [];
+    const targets = [
+      { sub: '.claude', idPrefix: '', dirLabel: null, patterns: [skillDirs('skills', 'skill', 0), commandFiles] },
+      { sub: '.gemini', idPrefix: '.gemini/', dirLabel: 'Gemini (.gemini)', patterns: [skillDirs('skills', 'skill', 0), commandFiles] },
+      { sub: '.agents', idPrefix: '.agents/', dirLabel: 'Delt (.agents)', patterns: [skillDirs('skills', 'skill', 0)] },
+    ];
+    for (const t of targets) {
+      collectOne(path.join(repoDir, t.sub), 'project', t.patterns, { idPrefix: t.idPrefix, dir: t.sub, dirLabel: t.dirLabel, seen, out });
+    }
+    return out.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'da'));
   }
 
-  return { project, personal, read };
+  function collectPersonal() {
+    const dirsList = personalDirs();
+    const seen = new Set();
+    const out = [];
+    dirsList.forEach((base, idx) => {
+      collectOne(base, 'personal', [skillDirs('', 'skill', 0), skillDirs('synced', 'synced', 1)], {
+        idPrefix: idx === 0 ? '' : `${idx}:`,
+        dir: base,
+        dirLabel: labelForPersonalDir(base),
+        seen,
+        out,
+      });
+    });
+    return out.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'da'));
+  }
+
+  const project = (repoDir) => collectProject(repoDir).map((x) => x.entry);
+  const personal = () => collectPersonal().map((x) => x.entry);
+
+  // Kun filer der står på listen kan læses – så kan der ikke hentes andet fra fx ~/.claude eller ~/.gemini.
+  function read(scope, repoDir, id) {
+    const found = (scope === 'personal' ? collectPersonal() : collectProject(repoDir)).find((x) => x.entry.id === id);
+    if (!found) return null;
+    const { text, truncated } = readCapped(found.realFile);
+    return { ...found.entry, truncated, content: parseFrontmatter(text).body };
+  }
+
+  return { project, personal, read, labelForPersonalDir };
 }
 
-module.exports = { createSkills, parseFrontmatter };
+module.exports = { createSkills, parseFrontmatter, labelForPersonalDir };

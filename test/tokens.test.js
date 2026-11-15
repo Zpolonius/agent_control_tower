@@ -293,8 +293,10 @@ test('tokens: knytter genoptaget Claude-session og lægger subagenter til hoveds
     const st = await t.summaryForState([]);
     assert.equal(st.sessionTokens[freshSession.id].matched, true);
     assert.equal(st.sessionTokens[freshSession.id].total, 50);
+    assert.equal(st.sessionTokens[freshSession.id].contextTokens, 40);
     assert.equal(st.sessionTokens[resumedSession.id].matched, true);
     assert.equal(st.sessionTokens[resumedSession.id].total, 1000);
+    assert.equal(st.sessionTokens[resumedSession.id].contextTokens, 200, 'kontekstvinduet er seneste tur fra hovedsessionen uden subagenters kontekst');
     assert.equal(st.tokenSummary.total.total, 1050);
 
     const rep = await t.report({ period: 'all', fresh: true });

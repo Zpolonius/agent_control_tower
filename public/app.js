@@ -44,6 +44,21 @@
     const c = cacheTotal(t);
     return `${fmtTok(t.total)} tokens (${fmtTok(t.input)} ind${c ? ` · ${fmtTok(c)} cache` : ''} · ${fmtTok(t.output)} ud)`;
   }
+  function contextChipProps(tokens) {
+    const ctx = tokens && tokens.contextTokens;
+    if (!ctx) return { hidden: true, cls: 'chip muted', text: '', title: '' };
+    const cls = ctx >= 160000 ? 'chip fail' : ctx >= 100000 ? 'chip warn' : 'chip ok';
+    return {
+      hidden: false,
+      cls,
+      text: `Kontekst: ${fmtTok(ctx)}`,
+      title: `Aktuelt kontekstvindue (seneste turs input + cache): ${fmtInt(ctx)} tokens. Overvej /compact ved højt forbrug.`,
+    };
+  }
+  function contextChip(tokens, id) {
+    const p = contextChipProps(tokens);
+    return h('span', { class: p.cls, 'data-ctx': id, title: p.title, hidden: p.hidden, text: p.text });
+  }
 
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
@@ -78,7 +93,24 @@
   }
 
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
-  function robot(status, mini) {
+  // Rollens kendetegn: et lille mærke ved figuren (lup, skjold, kolbe, pensel, klippebord, skruenøgle).
+  function roleMark(icon) {
+    const P = {
+      lup: [sv('circle', { cx: 98, cy: 14, r: 5 }), sv('line', { x1: 101.6, y1: 17.6, x2: 106, y2: 22 })],
+      skjold: [sv('path', { d: 'M100 6.5l7 3v5c0 4.6-3 7.6-7 9.5c-4-1.9-7-4.9-7-9.5v-5z' })],
+      kolbe: [sv('path', { d: 'M97 7h6M98.2 7v5.6l-4.8 8.4h13.2l-4.8-8.4V7' })],
+      pensel: [sv('path', { d: 'M94.5 22.5l9.5-11.5M104 11l2.6-2.6' }), sv('circle', { cx: 94.6, cy: 22.4, r: 1.6 })],
+      klippebord: [sv('rect', { x: 94, y: 8.5, width: 12, height: 14.5, rx: 1.5 }), sv('path', { d: 'M97.5 7h5v3h-5zM96.8 14h6.4M96.8 17.5h6.4' })],
+      skruenoegle: [sv('path', { d: 'M95 23l7.8-7.8' }), sv('path', { d: 'M102.4 15.6a4.2 4.2 0 1 0 2.4-6.2l-2 2 .3 2.4 2.4.3 2-2' })],
+      robot: [sv('rect', { x: 94.5, y: 10, width: 11, height: 9, rx: 2.5 }), sv('path', { d: 'M100 10V7' })],
+    };
+    return sv('g', { class: 'rolemark' }, sv('circle', { class: 'rolebg', cx: 100, cy: 15, r: 11.5 }), ...(P[icon] || P.robot));
+  }
+  function roleIcon(icon) {
+    return sv('svg', { class: 'roleicon', viewBox: '87 2.5 26 26', 'aria-hidden': 'true', focusable: 'false' }, roleMark(icon));
+  }
+
+  function robot(status, mini, icon) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
     const mark = { wait: '?', extwait: '…', quota: '◴', ready: '✓', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
@@ -97,7 +129,8 @@
       sv('path', { class: 'mouth', d: st === 'fail' ? 'M31 40q5 -4 10 0' : 'M31 38q5 4 10 0' }),
       st === 'wait' ? sv('line', { class: 'arm wave', x1: 49, y1: 52, x2: 60, y2: 30 }) : sv('line', { class: 'arm right', x1: 49, y1: 56, x2: 64, y2: 65 }),
       sv('line', { class: 'arm left', x1: 23, y1: 56, x2: 14, y2: 65 }),
-      mark ? sv('text', { class: 'mark', x: 70, y: 32 }, mark) : null);
+      mark ? sv('text', { class: 'mark', x: 70, y: 32 }, mark) : null,
+      icon ? roleMark(icon) : null);
   }
 
   function dur(ms) {
@@ -114,6 +147,7 @@
     return `har arbejdet i ${dur(s.startedAt)}`;
   }
   function bubbleText(s) {
+    if (s.briefPending && s.exitCode == null) return `Starter op – opgaven som ${s.role ? s.role.name : 'rolle'} bliver indsat, når agenten er klar.`;
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
     if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
@@ -149,6 +183,56 @@
     }
   }
 
+  function diffLineClass(line) {
+    if (line.startsWith('+') && !line.startsWith('+++')) return 'diffline add';
+    if (line.startsWith('-') && !line.startsWith('---')) return 'diffline del';
+    if (line.startsWith('@@')) return 'diffline hunk';
+    if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('commit ')) return 'diffline meta';
+    return 'diffline';
+  }
+
+  function renderDiffBlock(diffText, truncated) {
+    if (!diffText || !diffText.trim()) {
+      return h('div', { class: 'diffbox' }, h('p', { class: 'hint', text: 'Ingen synlige linjeændringer i diffet.' }));
+    }
+    const lines = diffText.replace(/\r\n/g, '\n').split('\n');
+    return h('div', { class: 'diffbox' },
+      h('pre', { class: 'diffpre' }, lines.map((line) => h('span', { class: diffLineClass(line), text: `${line}\n` }))),
+      truncated ? h('p', { class: 'hint', text: 'Diffet er afkortet, fordi det er meget stort.' }) : null);
+  }
+
+  function sumDiffItem(s, query, ...kids) {
+    const slot = h('div', { class: 'diffslot', hidden: true });
+    const btn = h('button', {
+      type: 'button', class: 'sumtoggle', 'aria-expanded': 'false',
+      onclick: async () => {
+        const open = btn.getAttribute('aria-expanded') === 'true';
+        if (open) {
+          btn.setAttribute('aria-expanded', 'false');
+          slot.hidden = true;
+          slot.replaceChildren();
+          return;
+        }
+        btn.setAttribute('aria-expanded', 'true');
+        slot.hidden = false;
+        slot.replaceChildren(h('p', { class: 'hint', text: 'Henter diff…' }));
+        try {
+          const res = await api(`/api/sessions/${s.id}/diff?${query}`);
+          if (btn.getAttribute('aria-expanded') !== 'true') return;
+          if (!res || !res.available) {
+            slot.replaceChildren(h('p', { class: 'alert', role: 'alert', text: (res && res.reason) || 'Diff kunne ikke hentes.' }));
+            return;
+          }
+          slot.replaceChildren(renderDiffBlock(res.diff, res.truncated));
+        } catch (err) {
+          if (btn.getAttribute('aria-expanded') !== 'true') return;
+          slot.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+        }
+      },
+    }, ...kids);
+    return h('li', {}, btn, slot);
+  }
+
   function summaryBody(s, r) {
     if (!r) return [h('p', { class: 'empty', text: 'Henter resumé…' })];
     if (!r.available) return [h('p', { class: 'empty', text: r.reason })];
@@ -161,13 +245,20 @@
     if (r.moved) out.push(h('p', { class: 'formnote', text: 'Der er skiftet branch, eller historikken er skrevet om, siden agenten startede. Listen kan derfor indeholde ændringer, som agenten ikke har lavet.' }));
     if (r.uncommitted) out.push(h('p', { class: 'formnote', text: 'Der ligger ændringer, som ikke er committet endnu.' }));
     if (r.commits.length) {
-      out.push(h('h3', { class: 'sumh', text: 'Commits' }), h('ul', { class: 'sumlist' }, r.commits.map((c) => h('li', {}, h('code', { text: c.sha }), ` ${c.subject}`))));
+      out.push(h('h3', { class: 'sumh', text: 'Commits' }), h('ul', { class: 'sumlist' },
+        r.commits.map((c) => sumDiffItem(s, `commit=${encodeURIComponent(c.sha)}`,
+          h('code', { text: c.sha }), h('span', { text: c.subject })))));
     }
     if (r.files.length) {
-      out.push(h('h3', { class: 'sumh', text: 'Filer' }), h('ul', { class: 'sumlist' }, r.files.map((f) => h('li', {},
-        h('span', { class: 'sumpath', text: f.path }),
-        f.isNew ? chip('ny', 'ok') : h('span', { class: 'sumnum', text: f.binary ? 'binær' : `+${f.added} −${f.removed}` }),
-        f.preexisting ? chip('fandtes eller var ændret før start', 'warn') : null))));
+      out.push(h('h3', { class: 'sumh', text: 'Filer' }), h('ul', { class: 'sumlist' }, r.files.map((f) => {
+        const badges = [
+          h('span', { class: 'sumpath', text: f.path }),
+          f.isNew ? chip('ny', 'ok') : h('span', { class: 'sumnum', text: f.binary ? 'binær' : `+${f.added} −${f.removed}` }),
+          f.preexisting ? chip('fandtes eller var ændret før start', 'warn') : null,
+        ];
+        if (f.binary) return h('li', {}, ...badges);
+        return sumDiffItem(s, `file=${encodeURIComponent(f.path)}`, ...badges);
+      })));
       if (r.fileCount > r.files.length) out.push(h('p', { class: 'hint', text: `…og ${r.fileCount - r.files.length} filer mere.` }));
     }
     out.push(h('p', { class: 'hint', text: 'Bygger på git: viser alt der er ændret i repoet, siden agenten startede – også hvis du selv eller en anden agent har ændret noget imens.' }));
@@ -177,15 +268,42 @@
   const ORDER = { venter: 0, fejlet: 1, kvote: 2, faerdig: 3, afventer: 4, arbejder: 5, afsluttet: 6 };
   const agentsIn = (list) => list.filter((s) => s.kind === 'agent').sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.startedAt - a.startedAt);
 
+  async function quickApprove(id, key, label) {
+    try {
+      await api(`/api/sessions/${id}/approve`, { method: 'POST', body: { key } });
+      state.sig = null;
+      await refresh();
+      toast(label);
+    } catch (err) { toast(err.message, true); }
+  }
+
   function deskCard(s, withRepo) {
     const st = STATUS[s.status] || STATUS.afsluttet;
     const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const quick = [];
+    if (s.exitCode == null && s.status === 'venter' && s.needsApproval) {
+      quick.push(
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qenter:${s.id}`,
+          onclick: () => quickApprove(s.id, 'enter', `Godkendte (Enter) hos ${s.name}`) }, 'Godkend (Enter)'),
+        h('button', { type: 'button', class: 'btn small', 'data-key': `qyes:${s.id}`,
+          onclick: () => quickApprove(s.id, 'yes', `Sendte Ja (y) til ${s.name}`) }, 'Ja (y)'),
+        h('button', { type: 'button', class: 'btn small danger', 'data-key': `qesc:${s.id}`,
+          onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
+      );
+    }
+    if (s.exitCode == null && s.pendingPaste) {
+      quick.push(
+        h('button', { type: 'button', class: 'btn small primary', 'data-key': `qpaste:${s.id}`,
+          onclick: () => quickApprove(s.id, 'enter', `Sendte indsat tekst til ${s.name}`) }, 'Send indsat tekst (Enter)'),
+      );
+    }
     return h('li', { class: `deskcard ${st.cls}` },
-      robot(s.status),
+      robot(s.status, false, s.role && s.role.icon),
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
-        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) })),
+        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
+        quick.length ? h('div', { class: 'quickactions' }, quick) : null,
         h('p', { class: 'desktokens', 'data-tokens': s.id, title: tokBreakdown(s.tokens), text: sessionTokenLine(s.tokens) }),
         s.status === 'arbejder' || s.status === 'afventer' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
       h('button', { type: 'button', class: `btn ${s.status === 'venter' ? 'primary' : ''}`, 'data-key': `desk:${s.id}`,
@@ -222,6 +340,13 @@
         if (n.textContent !== t) n.textContent = t;
         n.title = tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu';
       }
+      const cp = contextChipProps(s.tokens);
+      for (const n of document.querySelectorAll(`[data-ctx="${s.id}"]`)) {
+        if (n.textContent !== cp.text) n.textContent = cp.text;
+        if (n.className !== cp.cls) n.className = cp.cls;
+        n.title = cp.title;
+        n.hidden = cp.hidden;
+      }
     }
   }
 
@@ -248,6 +373,62 @@
     toastTimer = setTimeout(() => { t.className = 'toast'; }, 6000);
   }
 
+  const VALID_PAGES = new Set(['home', 'skills', 'tokens']);
+  const VALID_VIEWS = new Set(['overview', 'brain', 'roles', 'reports', 'issues', 'prs', 'skills']);
+  let lastHash = null;
+
+  function buildHash() {
+    if (!state.repo) {
+      if (state.page === 'skills' || state.page === 'tokens') return `#page=${state.page}`;
+      return '';
+    }
+    const p = new URLSearchParams();
+    p.set('repo', state.repo);
+    if (state.view && state.view !== 'overview') p.set('view', state.view);
+    if (state.view === 'issues' && state.issue[state.repo] != null) p.set('issue', String(state.issue[state.repo]));
+    else if (state.view === 'prs' && state.pr[state.repo] != null) p.set('pr', String(state.pr[state.repo]));
+    else if (state.view === 'brain' && state.brainFile[state.repo]) p.set('brainFile', state.brainFile[state.repo]);
+    return `#${p.toString()}`;
+  }
+
+  function syncUrl(replace) {
+    if (/token=[a-f0-9]{64}/.test(location.hash)) return;
+    const hash = buildHash();
+    lastHash = hash;
+    if (location.hash === hash || (!location.hash && !hash)) return;
+    const url = `${location.pathname}${location.search}${hash}`;
+    if (replace) history.replaceState(null, '', url);
+    else history.pushState(null, '', url);
+  }
+
+  function readRoute() {
+    const raw = location.hash.replace(/^#/, '');
+    const p = new URLSearchParams(raw);
+    p.delete('token');
+    const repo = p.get('repo');
+    if (repo) {
+      state.repo = repo;
+      state.page = 'home';
+      const v = p.get('view') || 'overview';
+      state.view = (VALID_VIEWS.has(v) || /^term:[a-f0-9]+$/.test(v)) ? v : 'overview';
+      const issueNum = Number(p.get('issue'));
+      if (Number.isInteger(issueNum) && issueNum > 0) state.issue[repo] = issueNum;
+      else delete state.issue[repo];
+      const prNum = Number(p.get('pr'));
+      if (Number.isInteger(prNum) && prNum > 0) state.pr[repo] = prNum;
+      else delete state.pr[repo];
+      const bf = p.get('brainFile') || p.get('file');
+      if (bf) state.brainFile[repo] = bf;
+      else delete state.brainFile[repo];
+    } else {
+      state.repo = null;
+      const page = p.get('page');
+      state.page = VALID_PAGES.has(page) ? page : 'home';
+      state.view = 'overview';
+    }
+    lastHash = location.hash;
+  }
+
   // Nøglen kommer med linket fra terminalen (efter #, som aldrig sendes til en server). Den gemmes i browseren under
   // netop denne adresse og port, hvor andre lokale sider ikke kan læse den, og fjernes straks fra adresselinjen.
   let token = null;
@@ -256,15 +437,30 @@
     if (m) {
       token = m[1];
       try { localStorage.setItem('ct-token', token); } catch { /* privat tilstand: nøglen huskes kun til siden lukkes */ }
-      history.replaceState(null, '', location.pathname);
+      const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (p.has('repo') || p.has('page')) readRoute();
+      const hash = buildHash();
+      history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+      lastHash = hash;
       return true;
     }
     if (!token) { try { token = localStorage.getItem('ct-token'); } catch { token = null; } }
     return false;
   }
-  readToken();
+  if (!readToken()) readRoute();
+
   // Indsætter du et nyt link i den samme fane (fx efter en genstart), læses den nye nøgle uden at siden skal genindlæses.
-  window.addEventListener('hashchange', () => { if (readToken()) { state.sig = null; refresh(true).then(renderMain); } });
+  // Ellers opdateres visningen, når du bruger frem/tilbage i browseren eller ændrer adressen.
+  function onRouteChange() {
+    if (readToken()) { state.sig = null; refresh(true).then(renderMain); return; }
+    if (location.hash === lastHash) return;
+    readRoute();
+    $('toast').className = 'toast';
+    renderChrome();
+    renderMain();
+  }
+  window.addEventListener('hashchange', onRouteChange);
+  window.addEventListener('popstate', onRouteChange);
 
   async function api(path, opts) {
     let res;
@@ -525,10 +721,49 @@
   const sessionsFor = (repo) => (state.data ? state.data.sessions.filter((s) => s.repo === repo) : []);
   const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && s.exitCode == null);
 
+  try { state.repoSort = localStorage.getItem('ct-repo-sort') === 'alpha' ? 'alpha' : 'active'; } catch { state.repoSort = 'active'; }
+
+  function repoSessionWeight(repoName) {
+    let best = 99;
+    for (const s of sessionsFor(repoName)) {
+      if (s.status === 'afsluttet') continue;
+      const w = ORDER[s.status] ?? 6;
+      if (w < best) best = w;
+    }
+    return best;
+  }
+
+  function sortRepos(list) {
+    if (state.repoSort === 'alpha') {
+      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'da'));
+    }
+    return [...list].sort((a, b) => {
+      const sw = repoSessionWeight(a.name) - repoSessionWeight(b.name);
+      if (sw !== 0) return sw;
+      const aDirty = (a.changed + a.untracked) > 0 ? 1 : 0;
+      const bDirty = (b.changed + b.untracked) > 0 ? 1 : 0;
+      if (bDirty !== aDirty) return bDirty - aDirty;
+      const aTime = (a.lastCommit && a.lastCommit.time) || 0;
+      const bTime = (b.lastCommit && b.lastCommit.time) || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return a.name.localeCompare(b.name, 'da');
+    });
+  }
+
+  function renderSortBtn() {
+    const btn = $('reposort');
+    if (!btn) return;
+    const isAlpha = state.repoSort === 'alpha';
+    btn.textContent = isAlpha ? 'A–Å' : 'Aktivitet';
+    btn.title = isAlpha ? 'Sorteret A–Å – klik for aktivitet' : 'Sorteret efter aktivitet – klik for A–Å';
+    btn.setAttribute('aria-label', isAlpha ? 'Sortering af repos: A–Å' : 'Sortering af repos: Aktivitet');
+  }
+
   // ---------- topbar + sidebar ----------
   function renderChrome() {
     const d = state.data;
     document.body.classList.toggle('offline', state.offline);
+    renderSortBtn();
     if (!d) {
       $('root').textContent = state.locked ? 'Låst' : state.offline ? 'Ingen forbindelse' : 'Indlæser…';
       $('summary').replaceChildren(); $('repolist').replaceChildren(); $('skipped').textContent = '';
@@ -558,7 +793,7 @@
       }, h('strong', { 'data-totaltok': '1', text: fmtTok(totalTok.total) }), ' tokens')) : null,
     ].filter(Boolean));
     const f = state.filter.trim().toLowerCase();
-    const repos = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
+    const repos = sortRepos(d.repos.filter((r) => !f || r.name.toLowerCase().includes(f)));
     const cur = (el, on) => { if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
     cur($('home'), !state.repo && state.page === 'home');
     cur($('skillsnav'), !state.repo && state.page === 'skills');
@@ -584,6 +819,7 @@
     state.repo = repo;
     state.page = page || 'home';
     state.view = view || 'overview';
+    syncUrl(false);
     $('toast').className = 'toast';
     renderChrome();
     renderMain();
@@ -609,11 +845,16 @@
     if (!state.repo && state.page === 'tokens') { main.replaceChildren(h('h2', { text: 'Token-regnskab' }), h('section', { id: 'panel', class: 'panel' })); tokensPanel($('panel')); return; }
     if (!state.repo) { main.replaceChildren(dashboard()); return; }
     const repo = state.data.repos.find((r) => r.name === state.repo);
+    if (state.view.startsWith('term:') && !sessionsFor(state.repo).some((s) => s.id === state.view.slice(5))) {
+      state.view = 'overview';
+      syncUrl(true);
+    }
     // Mappen kan være slettet eller omdøbt, mens en agent stadig kører i den. Så vises kun dens sessioner.
     if (!repo && !state.view.startsWith('term:')) {
       const first = sessionsFor(state.repo)[0];
-      if (!first) { state.repo = null; main.replaceChildren(dashboard()); return; }
+      if (!first) { state.repo = null; state.view = 'overview'; syncUrl(true); renderChrome(); main.replaceChildren(dashboard()); return; }
       state.view = `term:${first.id}`;
+      syncUrl(true);
     }
     const head = h('header', { class: 'repohead' },
       h('div', {},
@@ -633,8 +874,9 @@
   function renderTabs() {
     const tabs = $('tabs');
     if (!tabs) return;
+    syncUrl(true);
     const exists = state.data.repos.some((r) => r.name === state.repo);
-    const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
+    const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['roles', 'Roller'], ['reports', 'Rapporter'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
     const nodes = list.map(([id, label]) => tabButton(id, label));
     for (const s of sessionsFor(state.repo)) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
     const key = focusKey();
@@ -646,7 +888,7 @@
   function tabButton(id, label, extra) {
     return h('button', {
       type: 'button', class: 'tab', 'data-key': `tab:${id}`, 'aria-current': state.view === id ? 'page' : null,
-      onclick: () => { state.view = id; renderTabs(); renderPanel(); refocus(`tab:${id}`); },
+      onclick: () => { state.view = id; syncUrl(false); renderTabs(); renderPanel(); refocus(`tab:${id}`); },
     }, label, extra);
   }
   const branchText = (r) => (r.detached ? `intet branch – står på commit ${r.oid || '?'}` : r.branch || 'ingen branch');
@@ -659,6 +901,8 @@
     else if (state.view === 'brain') brainPanel(panel);
     else if (state.view === 'prs') prPanel(panel);
     else if (state.view === 'issues') issuesPanel(panel);
+    else if (state.view === 'roles') rolesPanel(panel);
+    else if (state.view === 'reports') reportsPanel(panel);
     else if (state.view === 'skills') skillsPanel(panel, state.repo);
     else termPanel(panel, state.view.slice(5));
   }
@@ -776,7 +1020,7 @@
     if (!d.repos.length) wrap.append(h('p', { class: 'empty', text: `Der blev ikke fundet git-repos i ${d.root}.` }));
     const first = d.agents[0];
     const f = state.filter.trim().toLowerCase();
-    const shown = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
+    const shown = sortRepos(d.repos.filter((r) => !f || r.name.toLowerCase().includes(f)));
     if (d.repos.length && !shown.length) wrap.append(h('p', { class: 'empty', text: 'Ingen repos matcher filteret.' }));
     wrap.append(h('ul', { class: 'cards' }, shown.map((r) => {
       const n = r.changed + r.untracked;
@@ -849,8 +1093,9 @@
     }
     const view = h('article', { class: 'brainview', tabindex: '-1' });
     const nav = h('ul', { class: 'brainfiles', 'aria-label': 'Filer i hjernen' });
-    const open = async (path) => {
+    const open = async (path, push) => {
       state.brainFile[repo] = path;
+      if (state.repo === repo && state.view === 'brain') syncUrl(!push);
       for (const b of nav.querySelectorAll('button')) { if (b.dataset.path === path) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); }
       view.replaceChildren(h('p', { class: 'empty', text: 'Åbner…' }));
       try {
@@ -863,7 +1108,7 @@
       } catch (err) { view.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message })); }
     };
     for (const f of files) {
-      nav.append(h('li', {}, h('button', { type: 'button', 'data-path': f.path, onclick: () => open(f.path) },
+      nav.append(h('li', {}, h('button', { type: 'button', 'data-path': f.path, onclick: () => open(f.path, true) },
         h('span', { text: f.path }), h('small', { text: ago(f.mtime) }))));
     }
     panel.className = 'panel brain';
@@ -871,17 +1116,28 @@
     const wanted = state.brainFile[repo];
     // Start med den vigtigste fil: CLAUDE.md, så AGENTS.md, så docs – ikke bare den første i alfabetet.
     const best = files.find((f) => f.path === 'CLAUDE.md') || files.find((f) => f.path === 'AGENTS.md') || files.find((f) => /^docs\//i.test(f.path)) || files[0];
-    open(files.some((f) => f.path === wanted) ? wanted : best.path);
+    open(files.some((f) => f.path === wanted) ? wanted : best.path, false);
   }
 
   // ---------- skills ----------
   const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+  function personalDirLabel(dir) {
+    if (!dir) return '';
+    if (/[/\\]\.claude([/\\]skills)?$/i.test(dir)) return `Claude (${dir})`;
+    if (/[/\\]\.gemini([/\\]skills)?$/i.test(dir)) return `Gemini (${dir})`;
+    if (/[/\\]\.agents([/\\]skills)?$/i.test(dir)) return `Delt (${dir})`;
+    return dir;
+  }
+
   function skillCard(sk, repo, onOpen, shadowed) {
+    const multiPersonal = state.data && Array.isArray(state.data.personalSkillsDirs) && state.data.personalSkillsDirs.length > 1;
+    const showDirChip = sk.dirLabel && (sk.scope === 'project' || multiPersonal);
     return h('li', {}, h('button', { type: 'button', class: 'skillrow', onclick: () => onOpen(sk, repo) },
       h('span', { class: 'skillname', text: `/${sk.name}` }),
       h('span', { class: 'skilldesc', text: sk.description || 'Ingen beskrivelse – agenten ved ikke, hvornår den skal bruge denne skill.' }),
       h('span', { class: 'cardrow' },
+        showDirChip ? chip(sk.dirLabel, 'muted') : null,
         sk.source === 'synced' ? chip('Synkroniseret fra claude.ai', 'muted') : null,
         sk.source === 'command' ? chip('Ældre kommando', 'muted') : null,
         sk.manualOnly ? chip('Kun når du selv kalder den', 'muted') : null,
@@ -891,8 +1147,8 @@
   function skillPrompt({ name, scope, repo, what, when, exists, dir }) {
     const where = scope === 'personal' ? `${dir}/${name}/SKILL.md (personlig skill, gælder alle mine repos)` : `.claude/skills/${name}/SKILL.md i dette repo (${repo})`;
     const lines = exists
-      ? [`Forbedr den eksisterende Claude Code-skill "${name}" i ${where}.`, 'Læs filen først, og bevar det der allerede virker. Vis mig ændringerne, før du gemmer.']
-      : [`Opret en ny Claude Code-skill med navnet "${name}" i ${where}.`, 'Findes mappen eller filen allerede, så stop og spørg mig – overskriv ikke noget.'];
+      ? [`Forbedr den eksisterende skill "${name}" i ${where}.`, 'Læs filen først, og bevar det der allerede virker. Vis mig ændringerne, før du gemmer.']
+      : [`Opret en ny skill med navnet "${name}" i ${where}.`, 'Findes mappen eller filen allerede, så stop og spørg mig – overskriv ikke noget.'];
     lines.push('', `Det skal skillen kunne: ${what.trim()}`);
     if (when.trim()) lines.push(`Den skal bruges når: ${when.trim()}`);
     lines.push('', 'Krav: filen starter med YAML-frontmatter med name og description. Beskrivelsen skal starte med det vigtigste brugstilfælde og sige hvornår skillen skal bruges. Hold instruktionerne korte og konkrete (under 500 linjer). Vis mig den færdige fil til sidst.');
@@ -947,10 +1203,13 @@
       return;
     }
     if (!still()) return;
+    const scopeInfo = f.scope === 'personal'
+      ? `Personlig skill${f.dirLabel ? ` · ${f.dirLabel}` : ''}`
+      : `Skill i ${sel.repo}${f.dirLabel ? ` · ${f.dirLabel}` : ''}`;
     panel.replaceChildren(
       h('div', { class: 'panelbar' }, back),
       h('h3', { class: 'plain', text: `/${f.name}` }),
-      h('p', { class: 'sub', text: `${f.scope === 'personal' ? 'Personlig skill' : `Skill i ${sel.repo}`} · ${f.id} · ændret ${ago(f.mtime)}${f.truncated ? ' · viser kun starten' : ''}` }),
+      h('p', { class: 'sub', text: `${scopeInfo} · ${f.id.replace(/^\d+:/, '')} · ændret ${ago(f.mtime)}${f.truncated ? ' · viser kun starten' : ''}` }),
       h('p', { class: 'skillwhen' }, h('strong', { text: 'Bruges når: ' }), f.description || 'Ingen beskrivelse.'),
       h('article', { class: 'brainview' }, window.renderMarkdown(f.content)));
   }
@@ -962,30 +1221,46 @@
     const when = h('input', { id: 'skillwhen', type: 'text', maxlength: '500', placeholder: 'Fx: når jeg beder om "ugens status"' });
     const scope = (value, label, checked) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'skillscope', value, checked }), label);
     const button = h('button', { type: 'submit', class: 'btn primary' }, 'Send til agent');
-    const exists = () => {
+    const draft = state.skillDraft[repo];
+    const personalDirs = (state.data && Array.isArray(state.data.personalSkillsDirs) && state.data.personalSkillsDirs.length)
+      ? state.data.personalSkillsDirs
+      : (state.data && state.data.personalSkillsDir ? [state.data.personalSkillsDir] : []);
+    const dirSelect = personalDirs.length > 1
+      ? h('select', { id: 'skilldir' }, personalDirs.map((d) => h('option', { value: d, selected: draft && draft.dir === d }, personalDirLabel(d))))
+      : null;
+    const dirWrap = dirSelect
+      ? h('div', { id: 'skilldirwrap', hidden: !(draft && draft.personal) }, h('label', { for: 'skilldir', text: 'Personlig mappe' }), dirSelect)
+      : null;
+    const selectedPersonalDir = () => (dirSelect ? dirSelect.value : personalDirs[0] || state.data.personalSkillsDir);
+    const existingEntry = () => {
       const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
       const pool = personal ? data.personal.filter((s) => s.source !== 'synced') : data.project.filter((s) => s.source === 'skill');
-      return pool.some((s) => s.name === name.value.trim());
+      const targetName = name.value.trim();
+      if (!personal) return pool.find((s) => s.name === targetName) || null;
+      return pool.find((s) => s.name === targetName && s.dir === selectedPersonalDir()) || pool.find((s) => s.name === targetName) || null;
     };
+    const exists = () => !!existingEntry();
     // Kladden huskes, så du ikke skal skrive forfra, hvis du lige skal starte en agent først.
-    const draft = state.skillDraft[repo];
     if (draft) { name.value = draft.name; what.value = draft.what; when.value = draft.when; }
-    const noAgent = liveAgents(repo).length ? null
-      : h('p', { class: 'formnote', text: 'Der kører ingen agent i dette repo lige nu. Start en med den grønne knap øverst – din kladde her bliver stående.' });
+    const noAgent = noAgentNote(repo);
     const sync = () => {
+      const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
+      if (dirWrap) dirWrap.hidden = !personal;
       button.textContent = exists() ? 'Bed agenten forbedre den' : 'Send til agent';
-      state.skillDraft[repo] = { name: name.value, what: what.value, when: when.value, personal: document.querySelector('input[name="skillscope"]:checked').value === 'personal' };
+      state.skillDraft[repo] = { name: name.value, what: what.value, when: when.value, personal, dir: selectedPersonalDir() };
     };
     const form = h('form', { class: 'skillform', novalidate: true, 'aria-labelledby': 'skillformtitle' },
       h('h3', { id: 'skillformtitle', text: 'Ny skill' }),
-      h('p', { class: 'sub', text: 'Beskriv hvad skillen skal kunne. Teksten indsættes hos en kørende agent i dette repo, som skriver filen. Du læser den igennem og trykker Enter.' }),
+      h('p', { class: 'sub', text: 'Beskriv hvad skillen skal kunne. Teksten indsættes hos en agent i dette repo, som skriver filen. Du læser den igennem og trykker Enter.' }),
       h('label', { for: 'skillname', text: 'Navn' }), name,
       h('p', { class: 'hint', id: 'skillnamehelp', text: 'Små bogstaver, tal og bindestreg. Navnet bliver også kommandoen, fx /kunde-rapport.' }),
       h('fieldset', {}, h('legend', { text: 'Hvor skal den gælde?' }), scope('project', 'Kun dette repo', !(draft && draft.personal)), scope('personal', 'Alle mine repos (personlig)', !!(draft && draft.personal))),
+      dirWrap,
       h('label', { for: 'skillwhat', text: 'Hvad skal den kunne?' }), what,
       h('label', { for: 'skillwhen', text: 'Hvornår skal agenten bruge den? (valgfrit)' }), when,
       noAgent, err, button);
     form.addEventListener('input', sync);
+    form.addEventListener('change', sync);
     if (draft) queueMicrotask(() => { if (form.isConnected) sync(); });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1000,15 +1275,133 @@
       for (const el of [name, what]) { if (el === bad) el.setAttribute('aria-invalid', 'true'); else el.removeAttribute('aria-invalid'); }
       if (bad) { bad.focus(); return; }
       const personal = document.querySelector('input[name="skillscope"]:checked').value === 'personal';
-      sendToAgent(skillPrompt({ name: n, scope: personal ? 'personal' : 'project', repo, what: what.value, when: when.value, exists: exists(), dir: state.data.personalSkillsDir }),
+      const found = existingEntry();
+      const targetDir = (personal && found && found.dir) ? found.dir : selectedPersonalDir();
+      sendToAgent(skillPrompt({ name: n, scope: personal ? 'personal' : 'project', repo, what: what.value, when: when.value, exists: !!found, dir: targetDir }),
         'Beskrivelsen er indsat hos agenten. Læs den igennem, og tryk Enter for at sende.').then((ok) => { if (ok) delete state.skillDraft[repo]; });
     });
     return form;
   }
 
   // Vises hvor man kan sende noget til en agent, når der ikke kører nogen – så man ved det, før man trykker.
-  const noAgentNote = (repo) => (liveAgents(repo).length ? null
-    : h('p', { class: 'formnote', text: 'Der kører ingen agent i dette repo lige nu. Start en med knapperne øverst – så kan du sende herfra.' }));
+  function noAgentNote(repo) {
+    if (liveAgents(repo).length) return null;
+    const first = state.data && state.data.agents && state.data.agents[0];
+    return h('p', {
+      class: 'formnote',
+      text: first
+        ? `Der kører ingen agent i dette repo endnu. Trykker du på knappen, startes ${first.name} automatisk med teksten indsat.`
+        : 'Der kører ingen agent i dette repo lige nu. Start en med knapperne øverst – så kan du sende herfra.',
+    });
+  }
+
+  // ---------- roller og rapporter ----------
+  // Hvilken agent rollerne startes med, huskes i browseren. Du vælger hver gang, men det sidste valg står klar.
+  function roleAgent() {
+    let id = null;
+    try { id = localStorage.getItem('ct-role-agent'); } catch { /* privat tilstand */ }
+    const agents = state.data.agents;
+    return (agents.find((a) => a.id === id) || agents[0] || {}).id || null;
+  }
+  function setRoleAgent(id) { try { localStorage.setItem('ct-role-agent', id); } catch { /* privat tilstand */ } }
+
+  function agentPicker(idFor) {
+    const agents = state.data.agents;
+    if (!agents.length) return h('p', { class: 'formnote', text: 'Der er ingen agenter i indstillingsfilen. Tilføj en under "agents", og start Control Tower igen.' });
+    const current = roleAgent();
+    return h('label', { class: 'rolepick', for: idFor }, 'Agent ',
+      h('select', { id: idFor, onchange: (e) => setRoleAgent(e.target.value) },
+        agents.map((a) => h('option', { value: a.id, selected: a.id === current }, a.name))));
+  }
+
+  const MODE = { report: ['Finder og rapporterer', 'muted'], develop: ['Retter kode', 'warn'] };
+  const STACKTXT = { typescript: 'TypeScript/JavaScript', kotlin: 'Kotlin/Android', flutter: 'Flutter/Dart' };
+
+  async function rolesPanel(panel) {
+    const repo = state.repo;
+    const still = () => state.repo === repo && state.view === 'roles';
+    panel.replaceChildren(h('p', { class: 'empty', text: 'Finder roller…' }));
+    let data;
+    try { data = await api(`/api/roles?repo=${encodeURIComponent(repo)}`); } catch (err) {
+      if (still()) panel.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+      return;
+    }
+    if (!still()) return;
+    const focus = h('textarea', { id: 'rolefocus', rows: '2', maxlength: '20000', placeholder: 'Fx: kig især på login og betaling – eller skriv opgaven til Udvikler / Issue-PO.' });
+    const stacks = data.stacks.length ? data.stacks.map((x) => STACKTXT[x] || x).join(', ') : 'ingen kendt teknologi fundet';
+    const card = (r) => h('li', { class: 'rolecard' },
+      h('div', { class: 'rolehead' }, roleIcon(r.icon), h('h3', { class: 'rolename', text: r.name })),
+      h('p', { class: 'roledesc', text: r.description || 'Ingen beskrivelse.' }),
+      h('p', { class: 'cardrow' }, chip(MODE[r.mode][0], MODE[r.mode][1]),
+        r.hasRepoNotes ? chip('Har tillæg i dette repo', 'ok') : null,
+        r.source === 'repo' ? chip('Rolle fra dette repo', 'ok') : null),
+      h('button', { type: 'button', class: 'btn', 'data-key': `role:${r.id}`, 'aria-label': `Start ${r.name} i ${repo}`,
+        disabled: !state.data.agents.length,
+        onclick: () => start('agent', $('roleagent').value, repo, r.id, focus.value.trim()) }, `Start ${r.name}`));
+    panel.replaceChildren(
+      h('div', { class: 'rolebar' },
+        h('p', { class: 'sub' }, h('strong', { text: 'Fundet i repoet: ' }), stacks),
+        agentPicker('roleagent')),
+      h('label', { class: 'rolefocuslabel', for: 'rolefocus', text: 'Fokus eller opgave (valgfrit)' }), focus,
+      data.roles.length ? h('ul', { class: 'rolegrid' }, data.roles.map(card))
+        : h('p', { class: 'empty', text: 'Der blev ikke fundet nogen roller. De ligger i mappen "roles" ved siden af Control Tower.' }),
+      h('p', { class: 'hint', text: 'Gennemgangs-rollerne ændrer ikke din kode – de skriver en rapport i docs/reports, som du finder under Rapporter. Et repo kan give en rolle et tillæg i .control-tower/roles/<rolle>.md, fx security.md.' }));
+  }
+
+  const SEV = { kritisk: 'fail', høj: 'fail', middel: 'warn', lav: 'muted', info: 'muted' };
+
+  async function reportsPanel(panel) {
+    const repo = state.repo;
+    const still = () => state.repo === repo && state.view === 'reports';
+    panel.replaceChildren(h('p', { class: 'empty', text: 'Finder rapporter…' }));
+    let data;
+    try { data = await api(`/api/roles?repo=${encodeURIComponent(repo)}`); } catch (err) {
+      if (still()) panel.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message }));
+      return;
+    }
+    if (!still()) return;
+    if (!data.reports.length) {
+      panel.replaceChildren(h('p', { class: 'empty', text: 'Ingen rapporter endnu. Start en rolle under Roller – når den er færdig, ligger dens rapport her (filer i docs/reports).' }));
+      return;
+    }
+    const has = (id) => data.roles.some((r) => r.id === id);
+    const roleName = (id) => (data.roles.find((r) => r.id === id) || {}).name || id;
+    const view = h('article', { class: 'reportview', tabindex: '-1' });
+    const nav = h('ul', { class: 'brainfiles', 'aria-label': 'Rapporter' });
+    const open = async (name) => {
+      state.report = state.report || {};
+      state.report[repo] = name;
+      for (const b of nav.querySelectorAll('button')) { if (b.dataset.name === name) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); }
+      view.replaceChildren(h('p', { class: 'empty', text: 'Åbner…' }));
+      let f;
+      try { f = await api(`/api/reports/file?repo=${encodeURIComponent(repo)}&name=${encodeURIComponent(name)}`); } catch (err) {
+        view.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message })); return;
+      }
+      if (!state.report || state.report[repo] !== name) return;
+      const text = (x) => `Fund ${x.id} fra rapporten docs/reports/${name}${x.severity ? ` (alvor: ${x.severity})` : ''}: ${x.title}\n\n${x.body}`;
+      const send = (roleId, input) => start('agent', $('reportagent').value, repo, roleId, input);
+      const findings = f.findings.filter((x) => x.severity !== 'info');
+      view.replaceChildren(...[
+        h('div', { class: 'panelbar' }, h('p', { class: 'filemeta', text: `docs/reports/${name}${f.truncated ? ' · viser kun starten' : ''}` }), agentPicker('reportagent')),
+        findings.length && has('po') ? h('button', { type: 'button', class: 'btn', onclick: () => send('po', findings.map(text).join('\n\n---\n\n')) }, `Lav issues af alle ${findings.length} fund`) : null,
+        f.findings.length ? h('ul', { class: 'findings' }, f.findings.map((x) => h('li', { class: 'finding' },
+          h('div', { class: 'reviewhead' },
+            h('span', {}, h('strong', { text: x.id }), ' ', x.severity ? chip(x.severity, SEV[x.severity]) : null, ' ', x.title),
+            h('span', { class: 'findactions' },
+              has('udvikler') && x.severity !== 'info' ? h('button', { type: 'button', class: 'btn small primary', 'aria-label': `Send ${x.id} til Udvikler`, onclick: () => send('udvikler', text(x)) }, 'Send til Udvikler') : null,
+              has('po') && x.severity !== 'info' ? h('button', { type: 'button', class: 'btn small', 'aria-label': `Lav issue af ${x.id}`, onclick: () => send('po', text(x)) }, 'Lav issue') : null)),
+          window.renderMarkdown(x.body)))) : window.renderMarkdown(f.content),
+      ].filter(Boolean));
+    };
+    for (const r of data.reports) {
+      nav.append(h('li', {}, h('button', { type: 'button', 'data-name': r.name, onclick: () => open(r.name) },
+        h('span', { text: r.roleId ? roleName(r.roleId) : r.name }), h('small', { text: `${r.date || ''} · ${ago(r.mtime)}` }))));
+    }
+    panel.className = 'panel brain';
+    panel.replaceChildren(nav, view);
+    const wanted = state.report && state.report[repo];
+    open(data.reports.some((r) => r.name === wanted) ? wanted : data.reports[0].name);
+  }
 
   // ---------- issues ----------
   // Husker hvilken skill du sidst brugte til issues i hvert repo (kun i denne browser).
@@ -1044,7 +1437,7 @@
     if (!data.available) { panel.replaceChildren(bar, h('p', { class: 'alert', role: 'alert', text: data.reason })); return; }
     if (!data.issues.length) { panel.replaceChildren(bar, h('p', { class: 'empty', text: 'Ingen åbne issues i dette repo.' })); return; }
     panel.replaceChildren(bar, h('ul', { class: 'prlist' }, data.issues.map((i) => h('li', {},
-      h('button', { type: 'button', class: 'prrow', onclick: () => { state.issue[repo] = i.number; issuesPanel(panel); } },
+      h('button', { type: 'button', class: 'prrow', onclick: () => { state.issue[repo] = i.number; syncUrl(false); issuesPanel(panel); } },
         h('span', { class: 'prnum', text: `#${i.number}` }),
         h('span', { class: 'prtitle' }, i.title, h('small', { text: `@${i.author} · ${ago(Date.parse(i.updatedAt))}${i.comments ? ` · ${i.comments} kommentar${i.comments === 1 ? '' : 'er'}` : ''}${i.assignees.length ? ` · tildelt ${i.assignees.map((a) => `@${a}`).join(', ')}` : ''}` })),
         i.labels.map((l) => chip(l)))))));
@@ -1052,7 +1445,7 @@
 
   async function issueDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'issues' && state.issue[repo] === number;
-    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.issue[repo]; issuesPanel(panel); } }, '← Alle issues');
+    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.issue[repo]; syncUrl(false); issuesPanel(panel); } }, '← Alle issues');
     let issue, skills;
     try {
       [issue, skills] = await Promise.all([
@@ -1079,10 +1472,11 @@
       names.map((n) => h('option', { value: n, selected: n === chosen }, `/${n}`)));
     show();
     const agents = liveAgents(repo);
+    const firstAgent = state.data && state.data.agents && state.data.agents[0];
     const picker = agents.length > 1
       ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
         agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : 'Ingen agent kører i dette repo endnu' });
+      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
     panel.replaceChildren(...[
       h('div', { class: 'panelbar' }, back, picker),
       h('h3', { class: 'plain' }, `#${issue.number} ${issue.title} `, issue.labels.map((l) => chip(l))),
@@ -1119,7 +1513,7 @@
     if (!data.prs.length) { panel.replaceChildren(bar, h('p', { class: 'empty', text: 'Ingen åbne pull requests i dette repo.' })); return; }
     panel.replaceChildren(bar, h('ul', { class: 'prlist' }, data.prs.map((p) => {
       const dec = DECISION[p.decision];
-      return h('li', {}, h('button', { type: 'button', class: 'prrow', onclick: () => { state.pr[repo] = p.number; prPanel(panel); } },
+      return h('li', {}, h('button', { type: 'button', class: 'prrow', onclick: () => { state.pr[repo] = p.number; syncUrl(false); prPanel(panel); } },
         h('span', { class: 'prnum', text: `#${p.number}` }),
         h('span', { class: 'prtitle' }, p.title, h('small', {}, h('span', { class: 'branch', text: p.branch }), ` · @${p.author} · ${ago(Date.parse(p.updatedAt))}`)),
         p.draft ? chip('Kladde', 'muted') : null,
@@ -1174,13 +1568,34 @@
 
   async function sendToAgent(text, done) {
     const agents = liveAgents(state.repo);
-    if (!agents.length) { toast('Start en agent i dette repo først med knapperne øverst – så kan teksten sendes til den.', true); return false; }
+    if (!agents.length) {
+      if (!state.data || !state.data.agents || !state.data.agents.length) {
+        toast('Start en agent i dette repo først med knapperne øverst – så kan teksten sendes til den.', true);
+        return false;
+      }
+      const first = state.data.agents[0];
+      try {
+        const s = await api('/api/sessions', { method: 'POST', body: { repo: state.repo, kind: 'agent', agentId: first.id, initialPaste: text } });
+        state.sig = null;
+        await refresh();
+        state.view = `term:${s.id}`;
+        syncUrl(false);
+        renderTabs();
+        renderPanel();
+        toast(`Startede ${first.name} og indsatte teksten. Tryk Enter i terminalen for at sende.`);
+        return true;
+      } catch (err) {
+        toast(err.message, true);
+        return false;
+      }
+    }
     const target = agents.find((a) => a.id === state.target) || agents[0];
     try {
       await api(`/api/sessions/${target.id}/paste`, { method: 'POST', body: { text } });
       state.sig = null;
       await refresh();
       state.view = `term:${target.id}`;
+      syncUrl(false);
       renderTabs(); renderPanel();
       toast(done || 'Teksten er indsat hos agenten. Læs den igennem, og tryk Enter for at sende.');
       return true;
@@ -1188,6 +1603,7 @@
       // Ligger der allerede en usendt tekst, ville den nye blive klistret bagpå – vis terminalen i stedet.
       if (err.data && err.data.pending) {
         state.view = `term:${target.id}`;
+        syncUrl(false);
         renderTabs(); renderPanel();
         toast('Der ligger allerede en usendt tekst hos agenten. Send den med Enter, eller slet den (Ctrl+U), og prøv igen.', true);
       } else toast(err.message, true);
@@ -1197,7 +1613,7 @@
 
   async function prDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'prs' && state.pr[repo] === number;
-    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.pr[repo]; prPanel(panel); } }, '← Alle pull requests');
+    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.pr[repo]; syncUrl(false); prPanel(panel); } }, '← Alle pull requests');
     let pr;
     try { pr = await api(`/api/prs/detail?repo=${encodeURIComponent(repo)}&number=${number}`); } catch (err) {
       if (still()) panel.replaceChildren(back, h('p', { class: 'alert', role: 'alert', text: err.message }));
@@ -1232,10 +1648,11 @@
     ].filter((it) => (it.body && it.body.trim()) || (it.kind === 'Review' && it.rawState !== 'COMMENTED'));
 
     const agents = liveAgents(repo);
+    const firstAgent = state.data && state.data.agents && state.data.agents[0];
     const picker = agents.length > 1
       ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
         agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : 'Ingen agent kører i dette repo endnu' });
+      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
     const dec = DECISION[pr.decision];
     const stateChip = pr.state === 'CLOSED' ? chip('Lukket', 'fail')
       : pr.state === 'MERGED' ? chip('Flettet', 'ok')
@@ -1498,7 +1915,11 @@
   function termStatus(s) {
     if (s.kind !== 'agent') return [sessionBadge(s)];
     const txt = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
-    return [sessionBadge(s), h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt })];
+    return [
+      sessionBadge(s),
+      h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt }),
+      contextChip(s.tokens, s.id),
+    ];
   }
 
   function termPanel(panel, id) {
@@ -1545,10 +1966,13 @@
     }
   }
 
-  async function start(kind, agentId, repoName) {
+  async function start(kind, agentId, repoName, roleId, input) {
     const repo = repoName || state.repo;
     try {
-      const s = await api('/api/sessions', { method: 'POST', body: { repo, kind, agentId } });
+      const body = { repo, kind, agentId };
+      if (roleId) { body.roleId = roleId; if (input) body.input = input; }
+      const s = await api('/api/sessions', { method: 'POST', body });
+      if (roleId) toast(`${s.name} starter. Opgaven indsættes, når agenten er klar – læs den, og tryk Enter.`);
       state.sig = null;
       await refresh();
       if (repoName) go(repo, `term:${s.id}`);
@@ -1720,6 +2144,13 @@
 
   // ---------- start ----------
   $('filter').addEventListener('input', (e) => { state.filter = e.target.value; renderChrome(); if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard()); });
+  $('reposort').addEventListener('click', () => {
+    state.repoSort = state.repoSort === 'alpha' ? 'active' : 'alpha';
+    try { localStorage.setItem('ct-repo-sort', state.repoSort); } catch { /* privat tilstand */ }
+    renderChrome();
+    if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard());
+  });
+  renderSortBtn();
   $('notifybtn').addEventListener('click', async () => {
     if (!canNotify()) { toast('Din browser kan ikke vise beskeder. Fanens titel og lyden virker stadig.', true); return; }
     const on = prefs.notify && Notification.permission === 'granted';
@@ -1740,5 +2171,5 @@
   const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
   setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-  refresh().then(renderMain);
+  refresh().then(() => { if (!$('tabs') && !$('dash') && !$('panel')) renderMain(); });
 })();

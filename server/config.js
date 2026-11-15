@@ -13,6 +13,7 @@ const DEFAULTS = {
   idleSeconds: 8,
   maxSessions: 12,
   personalSkillsDir: '',
+  personalSkillsDirs: [],
   tokensFile: '',
   claudeProjectsDir: '',
   agyBrainDir: '',
@@ -21,6 +22,21 @@ const DEFAULTS = {
 // "~" betyder din hjemmemappe – også når det står i indstillingsfilen.
 function expand(p) {
   return path.resolve(p === '~' || /^~[\\/]/.test(p) ? path.join(os.homedir(), p.slice(1)) : p);
+}
+
+function cleanSkillDir(val) {
+  if (typeof val !== 'string' || !val.trim()) return null;
+  const s = val.trim();
+  if (s === '~' || /^~[\\/]/.test(s)) return expand(s);
+  return path.isAbsolute(s) ? path.resolve(s) : null;
+}
+
+function defaultPersonalSkillsDirs() {
+  return [
+    path.join(os.homedir(), '.claude', 'skills'),
+    path.join(os.homedir(), '.gemini', 'skills'),
+    path.join(os.homedir(), '.agents', 'skills'),
+  ];
 }
 
 function cleanLogDir(val, fallback) {
@@ -35,9 +51,19 @@ function cleanLogDir(val, fallback) {
 function clean(raw) {
   const cfg = { ...DEFAULTS, ...(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) };
   cfg.root = typeof cfg.root === 'string' && cfg.root ? expand(cfg.root) : '';
-  // Tom værdi = standardstedet for personlige Claude Code-skills.
-  cfg.personalSkillsDir = typeof cfg.personalSkillsDir === 'string' && path.isAbsolute(cfg.personalSkillsDir)
-    ? cfg.personalSkillsDir : path.join(os.homedir(), '.claude', 'skills');
+  // Tom værdi = standardstederne for personlige skills (Claude Code, Gemini/Antigravity og delte .agents).
+  const explicitSingle = cleanSkillDir(raw && raw.personalSkillsDir);
+  cfg.personalSkillsDir = explicitSingle || path.join(os.homedir(), '.claude', 'skills');
+  const rawDirs = raw && Array.isArray(raw.personalSkillsDirs)
+    ? raw.personalSkillsDirs.map(cleanSkillDir).filter(Boolean)
+    : [];
+  const mergedDirs = rawDirs.length
+    ? (explicitSingle ? [explicitSingle, ...rawDirs] : rawDirs)
+    : (explicitSingle ? [explicitSingle] : defaultPersonalSkillsDirs());
+  cfg.personalSkillsDirs = [...new Set(mergedDirs)];
+  if (cfg.personalSkillsDirs.length && !explicitSingle && rawDirs.length) {
+    cfg.personalSkillsDir = cfg.personalSkillsDirs[0];
+  }
   cfg.tokensFile = raw && raw.tokensFile === false
     ? null
     : (typeof cfg.tokensFile === 'string' && cfg.tokensFile ? expand(cfg.tokensFile) : '');

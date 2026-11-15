@@ -44,10 +44,15 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
   "brainPaths": ["docs", "CLAUDE.md", "AGENTS.md", ".claude"],
   "agents": [
     { "id": "claude", "name": "Claude Code", "command": "claude" },
-    { "id": "anden", "name": "Anden agent", "command": "din-agent-kommando" }
+    { "id": "gemini", "name": "Gemini", "command": "agy" }
   ],
   "idleSeconds": 8,
-  "maxSessions": 12
+  "maxSessions": 12,
+  "personalSkillsDirs": [
+    "~/.claude/skills",
+    "~/.gemini/skills",
+    "~/.agents/skills"
+  ]
 }
 ```
 
@@ -63,15 +68,77 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
 
 Når en agent venter eller er færdig, viser dens kort og terminalvisning et resumé: hvor længe den kørte, nye commits, og hvilke filer der er ændret siden start. Filer du selv havde ændret, før agenten startede, markeres. Resuméet bygger kun på git og kalder ingen model, så det viser alt der er ændret i repoet i perioden – også det du selv eller en anden agent har lavet imens. Knappen "Bed om resumé" indsætter et spørgsmål hos agenten, hvis du vil have dens egen forklaring i ord.
 
+## Roller og rapporter
+
+Fanen **Roller** i et repo starter en agent i en fast rolle: Fejlfinder, Security, QA-tester, UI/UX-ekspert, Issue/PO eller Udvikler. Du vælger hver gang, hvilken agent rollen skal køre i (Claude Code, Antigravity eller en anden fra din liste), og kan skrive et fokus eller en opgave med. Rollens arbejdsbeskrivelse indsættes hos agenten, så snart den er klar – du læser den og trykker Enter.
+
+Rollerne er generiske: de finder selv ud af, hvordan repoet bygges og testes. Control Tower gætter teknologien (TypeScript/JavaScript, Kotlin/Android, Flutter/Dart) og giver rollen de tilhørende noter med fra `roles/stacks`.
+
+- **Gennemgangs-rollerne** (Fejlfinder, Security, QA, UI/UX) ændrer ikke din kode. De skriver én rapport i `docs/reports/ÅÅÅÅ-MM-DD-<rolle>.md`.
+- **Rapporter**-fanen viser rapporterne og deler dem op i fund. Hvert fund kan sendes til **Udvikler** (retter, tester, laver en PR og skriver en rapport tilbage) eller til **Issue/PO** (laver issues med acceptkriterie – viser dem først og opretter dem kun efter dit ja).
+- Rollerne ligger som markdown-filer i mappen `roles`. Ret dem som almindelig tekst.
+- **Tillæg pr. repo:** læg en fil i repoet på `.control-tower/roles/<rolle>.md`, fx `security.md`, så kommer dens tekst med, når rollen startes i netop det repo. En fil med et nyt navn og egen frontmatter (`name`, `icon`, `description`) bliver en ny rolle, der kun findes i det repo.
+
+At en rolle "ikke ændrer kode" er en instruks til agenten, ikke noget Control Tower kan håndhæve. Tjek resuméet efter kørslen.
+
 ## Issues
 
 Fanen Issues viser repoets åbne GitHub-issues (via `gh`). Åbn et issue, og send det til en kørende agent. Har repoet en skill til issues, kan du vælge den – så sendes kun `/skill-navn nummer`, og agenten henter selv issuet. Uden skill sendes titel og beskrivelse. Valget huskes pr. repo i din browser. Control Tower ændrer ikke noget på GitHub.
 
 ## Skills
 
-Fanen Skills i et repo viser repoets egne skills (`.claude/skills` og ældre `.claude/commands`) og dine personlige (`~/.claude/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget, fordi Claude Code bruger den personlige.
+Fanen Skills i et repo viser repoets egne skills (`.claude/skills`, `.gemini/skills`, `.agents/skills` samt ældre `.claude/commands` / `.gemini/commands`) og dine personlige (`~/.claude/skills`, `~/.gemini/skills`, `~/.agents/skills`, inkl. dem der er synkroniseret fra claude.ai). Punktet Skills i menuen viser dem alle samlet. Har et repo og din personlige mappe en skill med samme navn, markeres repoets som overskygget.
 
-Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Stien til personlige skills kan ændres med `personalSkillsDir` i indstillingsfilen.
+Control Tower læser kun skills. En ny skill laves ved at udfylde formularen: beskrivelsen indsættes hos en kørende agent, som skriver filen, og du trykker selv Enter. Findes navnet allerede, bedes agenten forbedre den eksisterende i stedet for at overskrive den. Når du har flere personlige skill-mapper, kan du i formularen vælge, hvilken mappe en ny personlig skill skal gemmes i.
+
+### Sådan tilføjer du ekstra skill-mapper (Windows og Mac)
+
+Har du skills liggende i en eller flere egne mapper på tværs af projekter, kan du tilføje dem i `personalSkillsDirs` i `control-tower.config.json`:
+
+```json
+{
+  "personalSkillsDirs": [
+    "~/.claude/skills",
+    "~/.gemini/skills",
+    "~/.agents/skills",
+    "~/mine-skills"
+  ]
+}
+```
+
+- `~/` udvides automatisk til din hjemmemappe på både **Mac** og **Windows**.
+- Du kan også angive fulde stier:
+  - **Mac**: `"/Users/dit-navn/mine-skills"`
+  - **Windows**: `"C:\\Users\\dit-navn\\mine-skills"`
+- Inde i hver mappe skal hver skill ligge i sin egen undermappe med en `SKILL.md`-fil:
+  ```text
+  mine-skills/
+  ├── min-foerste-skill/
+  │   └── SKILL.md
+  └── min-anden-skill/
+      └── SKILL.md
+  ```
+- Genstart Control Tower efter ændring af `control-tower.config.json`.
+
+### Del en ekstra skill-mappe direkte med både Claude Code og Gemini (`agy`)
+
+`personalSkillsDirs` gør, at Control Tower kan vise og bruge dine skills fra ekstra mapper. Vil du også have, at selve **Claude Code** og **Gemini (`agy`)** i terminalen automatisk indlæser skills fra en fælles mappe (fx `~/mine-skills`) uden at kopiere dem, kan du linke dem ind i agenternes standardmapper:
+
+**Mac (Terminal):**
+```bash
+ln -s ~/mine-skills/* ~/.claude/skills/
+ln -s ~/mine-skills/* ~/.gemini/skills/
+```
+
+**Windows (PowerShell):**
+```powershell
+Get-ChildItem "$HOME\mine-skills" -Directory | ForEach-Object {
+  New-Item -ItemType Junction -Path "$HOME\.claude\skills\$($_.Name)" -Target $_.FullName -ErrorAction SilentlyContinue
+  New-Item -ItemType Junction -Path "$HOME\.gemini\skills\$($_.Name)" -Target $_.FullName -ErrorAction SilentlyContinue
+}
+```
+
+Control Tower frasorterer automatisk dubletter via filernes reelle sti (`realpath`), så hver skill kun vises én gang i oversigten, selvom den er linket ind i flere mapper.
 
 ## Token-regnskab
 
@@ -125,7 +192,6 @@ npm test
 
 - Sessioner lever så længe Control Tower kører. Stopper du programmet (Ctrl+C), lukkes alle terminaler og agenter – også dem der ikke selv vil stoppe.
 - "Venter på dig" betyder kun, at agenten har været stille. En agent der arbejder uden at skrive noget, ser også sådan ud.
-- Den valgte fane og det åbne issue huskes ikke i adressen, så en genindlæsning går tilbage til overblikket.
 - Markdown-visningen er enkel: understregning som kursiv, links med parenteser og indlejrede nummererede lister vises ikke korrekt.
 - Tastatur: F6 flytter fokus ud af terminalen.
 - Kun git-repos direkte i rodmappen vises (ikke undermapper).

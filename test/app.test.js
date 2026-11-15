@@ -445,6 +445,47 @@ test('skills: en manglende personlig mappe giver bare en tom liste', () => {
   assert.deepEqual(s.project(path.join(tmp, 'findes-heller-ikke')), []);
   assert.equal(cfg.clean({}).personalSkillsDir, path.join(os.homedir(), '.claude', 'skills'));
   assert.equal(cfg.clean({ personalSkillsDir: 'relativ/sti' }).personalSkillsDir, path.join(os.homedir(), '.claude', 'skills'));
+  assert.deepEqual(cfg.clean({}).personalSkillsDirs, [
+    path.join(os.homedir(), '.claude', 'skills'),
+    path.join(os.homedir(), '.gemini', 'skills'),
+    path.join(os.homedir(), '.agents', 'skills'),
+  ]);
+});
+
+test('skills: henter fra flere personlige mapper samt .gemini og .agents i et repo', () => {
+  const { createSkills } = require('../server/skills');
+  const dirClaude = path.join(tmp, 'multi-claude', '.claude', 'skills');
+  const dirGemini = path.join(tmp, 'multi-gemini', '.gemini', 'skills');
+  const dirCustom = path.join(tmp, 'mine-egne-skills');
+  const repoMulti = path.join(tmp, 'repo-multi');
+  const mk = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+  mk(path.join(dirClaude, 'claude-skill', 'SKILL.md'), '---\nname: claude-skill\ndescription: Fra Claude\n---\nClaude body');
+  mk(path.join(dirGemini, 'gemini-skill', 'SKILL.md'), '---\nname: gemini-skill\ndescription: Fra Gemini\n---\nGemini body');
+  mk(path.join(dirCustom, 'delt-skill', 'SKILL.md'), '---\nname: delt-skill\ndescription: Fra egen mappe\n---\nDelt body');
+  mk(path.join(repoMulti, '.claude', 'skills', 'c-proj', 'SKILL.md'), '---\nname: c-proj\ndescription: Claude proj\n---\nC');
+  mk(path.join(repoMulti, '.gemini', 'skills', 'g-proj', 'SKILL.md'), '---\nname: g-proj\ndescription: Gemini proj\n---\nG');
+  mk(path.join(repoMulti, '.agents', 'skills', 'a-proj', 'SKILL.md'), '---\nname: a-proj\ndescription: Agents proj\n---\nA');
+
+  const cleaned = cfg.clean({ personalSkillsDirs: [dirClaude, dirGemini, dirCustom, dirClaude, 'relativ/ignoreres'] });
+  assert.deepEqual(cleaned.personalSkillsDirs, [dirClaude, dirGemini, dirCustom]);
+  const s = createSkills(cleaned);
+  const pers = s.personal();
+  assert.deepEqual(pers.map((x) => [x.name, x.id, x.dirLabel]), [
+    ['claude-skill', 'claude-skill/SKILL.md', 'Claude (~/.claude/skills)'],
+    ['delt-skill', '2:delt-skill/SKILL.md', 'mine-egne-skills'],
+    ['gemini-skill', '1:gemini-skill/SKILL.md', 'Gemini (~/.gemini/skills)'],
+  ]);
+  assert.equal(s.read('personal', null, '1:gemini-skill/SKILL.md').content, 'Gemini body');
+  assert.equal(s.read('personal', null, '2:delt-skill/SKILL.md').content, 'Delt body');
+
+  const proj = s.project(repoMulti);
+  assert.deepEqual(proj.map((x) => [x.name, x.id, x.dirLabel]), [
+    ['a-proj', '.agents/skills/a-proj/SKILL.md', 'Delt (.agents)'],
+    ['c-proj', 'skills/c-proj/SKILL.md', null],
+    ['g-proj', '.gemini/skills/g-proj/SKILL.md', 'Gemini (.gemini)'],
+  ]);
+  assert.equal(s.read('project', repoMulti, '.gemini/skills/g-proj/SKILL.md').content, 'G');
+  assert.equal(s.read('project', repoMulti, '.agents/skills/a-proj/SKILL.md').content, 'A');
 });
 
 test('issues: læser åbne issues via gh, afviser snydenumre og forklarer når gh mangler', async () => {
@@ -600,6 +641,45 @@ test('historik afspilles mærket som gammel, og flere sessioner af samme agent f
   c.ws.send(JSON.stringify({ type: 'input', data: 'hej\r' }));
   await until(() => c.out.includes('GOT[hej]'));
   c.ws.close();
+  await cleanup();
+});
+
+test('roller: start en agent i en rolle – opgaven indsættes når den er klar, men sendes først med Enter', async () => {
+  const list = (await get('/api/roles?repo=alpha')).json;
+  assert.ok(list.roles.some((r) => r.id === 'fejlfinder'), 'den indbyggede fejlfinder findes');
+  assert.ok(Array.isArray(list.stacks) && Array.isArray(list.reports));
+  const a = (await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'fejlfinder', input: 'kig på login' })).json;
+  assert.equal(a.role.id, 'fejlfinder');
+  assert.match(a.name, /^Fejlfinder · Ekko/);
+  assert.equal(a.briefPending, true);
+  const c = await connect(a.id);
+  assert.ok(await until(async () => (await sessionState(a.id)).briefPending === false, 8000), 'opgaven indsættes, når agenten har været stille');
+  assert.equal((await sessionState(a.id)).pendingPaste, true);
+  await sleep(300);
+  assert.ok(!c.out.includes('GOT['), 'intet er sendt før Enter');
+  c.ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+  assert.ok(await until(() => /GOT\[.*kig på login/.test(c.out), 5000), 'opgaven og fokus kom med');
+  assert.ok(/docs\/reports\/\d{4}-\d{2}-\d{2}-fejlfinder\.md/.test(c.out), 'rapportstien er udfyldt');
+  c.ws.close();
+  await cleanup();
+});
+
+test('roller: ugyldige forespørgsler afvises, og browseren kan ikke selv bestemme teksten', async () => {
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'findes-ikke' })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: '../../etc/passwd' })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'shell', roleId: 'fejlfinder' })).status, 400, 'en terminal kan ikke have en rolle');
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 'fejlfinder', input: { x: 1 } })).status, 400);
+  assert.equal((await post('/api/sessions', { repo: 'alpha', kind: 'agent', agentId: 'echo', roleId: 7 })).status, 400);
+  assert.equal((await get('/api/roles?repo=..')).status, 404);
+  assert.equal((await req('GET', '/api/roles?repo=alpha')).status, 401);
+  assert.equal((await get('/api/reports/file?repo=alpha&name=..%2F..%2Fsecret.env')).status, 404);
+  assert.equal((await req('GET', '/api/reports/file?repo=alpha&name=x.md')).status, 401);
+  assert.equal((await get('/api/state')).json.sessions.filter((x) => x.exitCode == null).length, 0, 'ingen af dem startede noget');
+});
+
+test('roller: en session uden rolle opfører sig som før', async () => {
+  const a = (await post('/api/sessions', { repo: 'beta', kind: 'agent', agentId: 'echo' })).json;
+  assert.deepEqual([a.role, a.briefPending, a.name], [null, false, 'Ekko']);
   await cleanup();
 });
 

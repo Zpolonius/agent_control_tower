@@ -26,7 +26,7 @@ const BRAILLE_SPINNER_RE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S/;
 const SYMBOL_SPINNER_RE = /^[✶✻✽✢✳]\s*\S.*(?:…|\.\.\.)(?:\s*\([^)]*\))?\s*$/;
 const INTERRUPT_RE = /\b(esc to interrupt|ctrl\+c to interrupt|ctrl\+b to run in background)\b/i;
 const CHROME_RE = /^[─━═╭╮╰╯│┃|+`~\-=_.\s]+$/;
-const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift\+tab to cycle\b|logout$|(?:[⏵⏸▶►▸]+\s*)?(?:bypass permissions|accept edits|plan mode)\s+on\b)/i;
+const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift\+tab to cycle\b|logout$|(?:[⏵⏸▶►▸]+\s*)?(?:bypass permissions|accept edits|plan mode|auto mode)\s+on\b)/i;
 const USER_WAIT_RE = /\b((?:waiting|awaiting)\s+(?:for\s+)?(?:user|you|your|input|reply|response|confirmation|approval|permission|decision)|venter på (?:dig|dit svar|svar fra dig|godkendelse|tilladelse|input))\b/i;
 const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|(?:needs|requires) (?:your )?(?:approval|permission|confirmation)|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|type here to tell|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
 const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
@@ -59,7 +59,7 @@ const PROC_RULES = [
 ];
 
 const BUFFER_RULES = [
-  { waitingFor: 'subagenter', re: /\b(sub-?agents?|subagenter|background agents?|swarm|teammates?|spawning agent|waiting for \d+ agents?|running \d+ agents?|\d+ agents? running|agent tools? running)\b/i },
+  { waitingFor: 'subagenter', re: /\b(spawning (?:sub-?)?agents?|waiting for (?:\d+ )?(?:sub-?)?agents?|running \d+ (?:sub-?)?agents?|\d+ (?:sub-?|background )?agents? running|agent tools? running|(?:sub-?|background )agents? running|kører subagenter|venter på subagenter)\b/i },
   { waitingFor: 'subagenter', re: /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i },
   { waitingFor: 'e2e-tests', re: /\b(playwright|cypress|puppeteer|selenium|webdriver|appium|maestro|detox|patrol|e2e[- ]tests?|end-to-end)\b/i },
   { waitingFor: 'tests', re: /\b(running tests?|kører tests?|test suite|waiting for tests?|vitest|jest|mocha|pytest|flutter test|dart test|npm test|pnpm test|cargo test|go test|node --test)\b/i },
@@ -483,4 +483,9 @@ module.exports = {
   inspectQuota,
   isTaskDone,
   sanitizeDetail,
+  CHROME_RE,
+  FOOTER_RE,
+  INTERRUPT_RE,
+  BARE_PROMPT_RE,
+  TURN_DONE_RE,
 };

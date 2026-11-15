@@ -11,6 +11,7 @@ const { createGithub } = require('./github');
 const { createSkills } = require('./skills');
 const { createTokens } = require('./tokens');
 const summary = require('./summary');
+const { createRoles } = require('./roles');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MODULES = path.join(__dirname, '..', 'node_modules');
@@ -39,6 +40,7 @@ function createApp({ config, token }) {
   });
   const github = createGithub();
   const skills = createSkills(config);
+  const roles = createRoles();
   const headers = sec.securityHeaders(port);
 
   function send(res, code, body, type) {
@@ -86,7 +88,9 @@ function createApp({ config, token }) {
       const tok = await tokens.summaryForState(activeSessions);
       return send(res, 200, {
         root: config.root, host: sessions.hostname, idleSeconds: config.idleSeconds,
-        agents: config.agents.map((a) => ({ id: a.id, name: a.name })), personalSkillsDir: config.personalSkillsDir,
+        agents: config.agents.map((a) => ({ id: a.id, name: a.name })),
+        personalSkillsDir: config.personalSkillsDir,
+        personalSkillsDirs: config.personalSkillsDirs || (config.personalSkillsDir ? [config.personalSkillsDir] : []),
         repos: data.repos, skipped: data.skipped, error: data.error,
         sessions: activeSessions.map((s) => (s.kind === 'agent' ? { ...s, tokens: tok.sessionTokens[s.id] || null } : s)),
         tokenSummary: tok.tokenSummary,
@@ -134,6 +138,19 @@ function createApp({ config, token }) {
       return file ? send(res, 200, file) : fail(res, 404, 'Skillen findes ikke');
     }
 
+    if (req.method === 'GET' && route === '/api/roles') {
+      const dir = scanner.resolve(url.searchParams.get('repo'));
+      if (!dir) return fail(res, 404, 'Ukendt repo');
+      return send(res, 200, { roles: roles.list(dir), stacks: roles.detectStacks(dir), reports: roles.reports(dir) });
+    }
+
+    if (req.method === 'GET' && route === '/api/reports/file') {
+      const dir = scanner.resolve(url.searchParams.get('repo'));
+      if (!dir) return fail(res, 404, 'Ukendt repo');
+      const file = roles.readReport(dir, url.searchParams.get('name'));
+      return file ? send(res, 200, file) : fail(res, 404, 'Rapporten findes ikke');
+    }
+
     if (req.method === 'GET' && route === '/api/prs') {
       const repo = url.searchParams.get('repo');
       const dir = scanner.resolve(repo);
@@ -156,6 +173,15 @@ function createApp({ config, token }) {
       if (s.kind !== 'agent') return send(res, 200, { available: false, reason: 'Resumé findes kun for agenter.' });
       const data = await summary.summarize(s.cwd, s.baseline);
       return send(res, 200, { ...data, startedAt: s.startedAt, endedAt: s.endedAt, lastOutputAt: s.lastOutputAt });
+    }
+
+    const dm = route.match(/^\/api\/sessions\/([a-f0-9]{24})\/diff$/);
+    if (req.method === 'GET' && dm) {
+      const s = sessions.get(dm[1]);
+      if (!s) return fail(res, 404, 'Ukendt session');
+      if (s.kind !== 'agent') return send(res, 200, { available: false, reason: 'Diff findes kun for agenter.' });
+      const data = await summary.diff(s.cwd, s.baseline, { file: url.searchParams.get('file'), commit: url.searchParams.get('commit') });
+      return send(res, 200, data);
     }
 
     if (req.method === 'GET' && route === '/api/issues') {
@@ -181,7 +207,7 @@ function createApp({ config, token }) {
     if (req.method === 'POST' && route === '/api/sessions') {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) return fail(res, 415, 'Forventede JSON');
       let body;
-      try { body = await readJson(req); } catch (err) { return fail(res, err.status || 400, err.message); }
+      try { body = await readJson(req, 512 * 1024); } catch (err) { return fail(res, err.status || 400, err.message); }
       const cwd = scanner.resolve(body.repo);
       if (!cwd) return fail(res, 404, 'Ukendt repo');
       let agent = null;
@@ -190,13 +216,45 @@ function createApp({ config, token }) {
         agent = config.agents.find((a) => a.id === body.agentId);
         if (!agent) return fail(res, 400, 'Ukendt agent');
       } else if (body.kind !== 'shell') return fail(res, 400, 'Ukendt sessionstype');
+      if (body.initialPaste != null) {
+        if (body.kind !== 'agent' || typeof body.initialPaste !== 'string') return fail(res, 400, 'Ugyldig opstartstekst');
+        if (body.initialPaste.length > PASTE_MAX) {
+          return fail(res, 413, `Teksten er for lang til at sende på én gang (${body.initialPaste.length.toLocaleString('da-DK')} tegn, maks. ${PASTE_MAX.toLocaleString('da-DK')}).`);
+        }
+      }
+      // En rolle slås op på dens id. Selve teksten bygges her på serveren ud fra rollefilerne – browseren sender den ikke.
+      let built = null;
+      if (body.roleId != null) {
+        if (body.kind !== 'agent' || typeof body.roleId !== 'string') return fail(res, 400, 'En rolle kræver en agent');
+        if (body.input != null && typeof body.input !== 'string') return fail(res, 400, 'Ugyldig tekst til rollen');
+        built = roles.build(cwd, body.repo, body.roleId, body.input || '');
+        if (!built) return fail(res, 400, 'Ukendt rolle');
+      }
       try {
         // For agenter huskes repoets tilstand ved start, så der kan vises et resumé bagefter.
         const baseline = body.kind === 'agent' ? await summary.baseline(cwd) : null;
-        return send(res, 201, sessions.create({ repo: body.repo, cwd, kind: body.kind, agent, baseline }));
+        return send(res, 201, sessions.create({
+          repo: body.repo, cwd, kind: body.kind, agent, baseline,
+          role: built && built.role, brief: built && built.text,
+          initialPaste: body.initialPaste || null,
+        }));
       } catch (err) {
         return fail(res, err.code === 'LIMIT' ? 429 : 500, err.code === 'LIMIT' ? err.message : 'Terminalen kunne ikke startes');
       }
+    }
+
+    const am = route.match(/^\/api\/sessions\/([a-f0-9]{24})\/approve$/);
+    if (req.method === 'POST' && am) {
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) return fail(res, 415, 'Forventede JSON');
+      let body;
+      try { body = await readJson(req); } catch (err) { return fail(res, err.status || 400, err.message); }
+      const result = sessions.approve(am[1], body.key);
+      if (result === 'ok') return send(res, 200, { ok: true });
+      return fail(res, result === 'gone' ? 404 : 400, {
+        gone: 'Agenten kører ikke længere',
+        'not-agent': 'Kun for agenter',
+        invalid: 'Ugyldigt hurtig-svar',
+      }[result] || 'Kunne ikke sende svar');
     }
 
     const pm = route.match(/^\/api\/sessions\/([a-f0-9]{24})\/paste$/);

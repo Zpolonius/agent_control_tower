@@ -29,9 +29,12 @@
   <p class="sr" id="announce" role="status"></p>
   <div class="layout">
     <nav class="sidebar" aria-label="Repos">
-      <label class="filter"><span class="sr">Filtrer repos</span>
-        <input id="filter" type="search" placeholder="Filtrer repos…" autocomplete="off" spellcheck="false">
-      </label>
+      <div class="filterbar">
+        <label class="filter"><span class="sr">Filtrer repos</span>
+          <input id="filter" type="search" placeholder="Filtrer repos…" autocomplete="off" spellcheck="false">
+        </label>
+        <button class="sortbtn" id="reposort" type="button" title="Sorteret efter aktivitet – klik for A–Å" aria-label="Sortering af repos: Aktivitet">Aktivitet</button>
+      </div>
       <button class="navhome" id="home" type="button">Overblik</button>
       <button class="navhome" id="skillsnav" type="button">Skills</button>
       <button class="navhome" id="tokensnav" type="button">Regnskab</button>

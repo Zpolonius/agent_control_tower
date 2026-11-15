@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
 const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
-const { createSessions } = require('../server/sessions');
+const { createSessions, lastLine } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
   const procs = [
@@ -689,6 +689,200 @@ test('API /api/state: returnerer status kvote når agent rammer Individual quota
     assert.equal(found.waitingFor, 'quota reset');
     assert.match(found.waitingDetail, /Individual quota reached/i);
     assert.match(found.waitingDetail, /Resets in 1h 30m/i);
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lastLine: filtrerer TUI-rammer, footers, prompts og tur-tidsstempler for Claude Code, Gemini og Codex', () => {
+  // Claude Code afsluttet tur med PR-link, tur-tidsstempel, rammer, tom prompt og auto-mode footer
+  const claudePrDone = [
+    '● PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71',
+    '✻ Churned for 25s · done 4:33 PM',
+    '──────────────────────────',
+    '❯ ',
+    '──────────────────────────',
+    '  ▸▸ auto mode on (shift+tab to cycle) · PR #71',
+  ].join('\r\n');
+  assert.equal(lastLine(claudePrDone), 'PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71');
+
+  // Claude Code spørgsmål med Sautéed/Brewed tidsstempel, accept edits footer og shortcuts
+  const claudeQuestion = [
+    '⏺ Jeg har opdateret testen.',
+    '● Skal jeg pushe?',
+    '✻ Sautéed for 45s · done 4:19 PM',
+    '* Brewed for 1m 23s',
+    '──────────────────────────',
+    '❯ ',
+    '⏵⏵ accept edits on (shift+tab to cycle) · 42% context left',
+    '? for shortcuts',
+  ].join('\r\n');
+  assert.equal(lastLine(claudeQuestion), 'Skal jeg pushe?');
+
+  // Gemini / Antigravity TUI med boks-kanter, ConPTY \x1b[1C, placeholder-prompt og interrupt-linje
+  const geminiBoxed = [
+    '╭────────────────────────────────────────╮',
+    '│ ● Skal\x1b[1Cjeg\x1b[1Ckøre\x1b[1Cflutter\x1b[1Ctest\x1b[1Cnu?       │',
+    '╰────────────────────────────────────────╯',
+    '╭────────────────────────────────────────╮',
+    '│ > Type your message or @path/to/file   │',
+    '╰────────────────────────────────────────╯',
+    'ctrl+c to interrupt · ctrl+b to run in background',
+  ].join('\r\n');
+  assert.equal(lastLine(geminiBoxed), 'Skal jeg køre flutter test nu?');
+
+  // OpenAI Codex TUI med bullet (•), placeholder-prompt og esc to interrupt
+  const codexDone = [
+    '• Alle 14 tests i wait-check.test.js består.',
+    '╭────────────────────────────────────────╮',
+    '│ › Ask Codex to do anything             │',
+    '╰────────────────────────────────────────╯',
+    'shift+tab to cycle · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(lastLine(codexDone), 'Alle 14 tests i wait-check.test.js består.');
+
+  // Aktive spinner-linjer bevares fortsat, når de er den seneste meningsfulde linje
+  const activeSpinner = [
+    '● Starter testkørsel',
+    '⠋ Arbejder… 3\r⠙ Arbejder… 4',
+    '──────────────────────────',
+    '❯ ',
+    '? for shortcuts · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(lastLine(activeSpinner), '⠙ Arbejder… 4');
+
+  // Eksisterende garantier fra app.test.js samt errorsFirst med TUI-bundlinjer
+  assert.equal(lastLine('\x1b[32mRetter pdf.ts\x1b[0m\r\n\x1b[2K> '), 'Retter pdf.ts');
+  assert.equal(lastLine('Skal jeg pushe?\r\n╭────────╮\r\n│ > \x1b[7m \x1b[0m │\r\n╰────────╯'), 'Skal jeg pushe?');
+  const failedWithFooter = [
+    '● Fatal error: migrations failed',
+    'Efterfølgende oprydning færdig',
+    '✻ Churned for 5s · done 4:35 PM',
+    '❯ ',
+    '? for shortcuts',
+  ].join('\r\n');
+  assert.equal(lastLine(failedWithFooter, true), 'Fatal error: migrations failed');
+});
+
+test('inspectBuffer: almindelig samtale med ordet subagenter udløser ikke falsk venten på subagenter', () => {
+  const prose = [
+    '● Alle 3 subagenter er nu færdige med deres opgaver.',
+    'Vi kan starte et nyt hold subagenter på de næste issues.',
+  ].join('\r\n');
+  assert.equal(inspectBuffer(prose), null);
+  assert.equal(inspectBuffer('● 2 subagents running…\r\nesc to interrupt').waitingFor, 'subagenter');
+  assert.equal(inspectBuffer('● Kører subagenter i baggrunden').waitingFor, 'subagenter');
+});
+
+test('summary.diff: viser diff for commit, ændret fil og ny ucommittet fil og afviser ulovlige stier', async () => {
+  const { baseline, diff } = require('../server/summary');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-diff-test-'));
+  try {
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir });
+    g('init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'linje 1\n');
+    g('add', '.');
+    g('commit', '-q', '-m', 'Start');
+    const base = await baseline(dir);
+    fs.appendFileSync(path.join(dir, 'a.txt'), 'linje 2\n');
+    g('add', 'a.txt');
+    g('commit', '-q', '-m', 'Tilføj linje 2');
+    const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(dir, 'ny.txt'), 'helt ny fil\n');
+
+    const fileDiff = await diff(dir, base, { file: 'a.txt' });
+    assert.equal(fileDiff.available, true);
+    assert.match(fileDiff.diff, /\+linje 2/);
+
+    const newFileDiff = await diff(dir, base, { file: 'ny.txt' });
+    assert.equal(newFileDiff.available, true);
+    assert.match(newFileDiff.diff, /\+helt ny fil/);
+
+    const commitDiff = await diff(dir, base, { commit: sha });
+    assert.equal(commitDiff.available, true);
+    assert.match(commitDiff.diff, /Tilføj linje 2/);
+    assert.match(commitDiff.diff, /\+linje 2/);
+
+    assert.equal((await diff(dir, base, { file: '../udenfor.txt' })).available, false);
+    assert.equal((await diff(dir, base, { commit: '--output=/tmp/x' })).available, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API: initialPaste ved opstart, POST /approve og GET /diff', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-api-features-'));
+  const repo = path.join(dir, 'demo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'init', '-q', '-b', 'main'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'fil.txt'), 'start\n');
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+  const token = 'e'.repeat(64);
+  const config = cfg.clean({
+    root: dir,
+    port: 4321,
+    idleSeconds: 2,
+    maxSessions: 2,
+    agents: [{
+      id: 'paste-agent',
+      name: 'PasteAgent',
+      command: 'node -e "process.stdout.write(\'\\x1b[?2004hKlar\\n\'); process.stdin.on(\'data\', d => process.stdout.write(\'MODTOG:\' + d.toString()))"',
+    }],
+  });
+  const app = createApp({ config, token });
+  const dispatch = (method, url, body) => new Promise((resolve) => {
+    const req = new EventEmitter();
+    req.method = method;
+    req.url = url;
+    req.headers = {
+      host: '127.0.0.1:4321',
+      authorization: `Bearer ${token}`,
+      origin: 'http://127.0.0.1:4321',
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    };
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      writeHead(code) { this.statusCode = code; this.headersSent = true; },
+      end(chunk) { resolve({ status: this.statusCode, json: JSON.parse(String(chunk || '{}')) }); },
+    };
+    app.server.emit('request', req, res);
+    if (body) req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+
+  try {
+    const created = await dispatch('POST', '/api/sessions', {
+      repo: 'demo', kind: 'agent', agentId: 'paste-agent', initialPaste: 'Løs issue #42',
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id;
+
+    let st = null;
+    const end = Date.now() + 5000;
+    while (Date.now() < end) {
+      const r = await dispatch('GET', '/api/state');
+      st = r.json.sessions.find((s) => s.id === id);
+      if (st && st.pendingPaste) break;
+      await new Promise((r2) => setTimeout(r2, 80));
+    }
+    assert.equal(st.pendingPaste, true, 'initialPaste blev sat ind automatisk');
+
+    // Godkend/send via /approve
+    assert.equal((await dispatch('POST', `/api/sessions/${id}/approve`, { key: 'ugyldig' })).status, 400);
+    const appRes = await dispatch('POST', `/api/sessions/${id}/approve`, { key: 'enter' });
+    assert.equal(appRes.status, 200);
+    const afterApprove = (await dispatch('GET', '/api/state')).json.sessions.find((s) => s.id === id);
+    assert.equal(afterApprove.pendingPaste, false, 'pendingPaste nulstilles efter approve(enter)');
+
+    // Ændr en fil og tjek /diff-endpointet
+    fs.appendFileSync(path.join(repo, 'fil.txt'), 'ny linje\n');
+    const diffRes = await dispatch('GET', `/api/sessions/${id}/diff?file=fil.txt`);
+    assert.equal(diffRes.status, 200);
+    assert.equal(diffRes.json.available, true);
+    assert.match(diffRes.json.diff, /\+ny linje/);
   } finally {
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });
