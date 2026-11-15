@@ -36,6 +36,9 @@ h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; font-fam
 .topactions { display: flex; gap: 6px; flex-wrap: wrap; }
 .topactions [aria-pressed="true"] { border-color: var(--bring); color: var(--bring); }
 .summary li { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.summary li.tokpill { padding: 0; border-color: var(--line2); }
+.summarybtn { background: none; border: 0; padding: 3px 10px; border-radius: 999px; cursor: pointer; font-size: 12px; color: var(--muted); }
+.summarybtn:hover { color: var(--text); background: var(--panel2); }
 .summary strong { color: var(--text); font-family: var(--mono); }
 .summary .work { border-color: var(--bring); } .summary .work strong { color: var(--bring); }
 .summary .extwait { border-color: var(--blue); } .summary .extwait strong { color: var(--blue); }
@@ -49,7 +52,8 @@ h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; font-fam
 .filter input::placeholder { color: var(--muted); }
 .navhome, .repo { width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 8px 10px; cursor: pointer; display: block; }
 .navhome { margin: 10px 0 0; font-weight: 600; }
-.navhome + .navhome { margin: 2px 0 8px; }
+.navhome + .navhome { margin: 2px 0 0; }
+#tokensnav { margin-bottom: 8px; }
 .navhome:hover, .repo:hover { background: var(--panel2); }
 [aria-current="page"] { background: var(--panel2); border-color: var(--line2); box-shadow: inset 3px 0 0 var(--bring); }
 .repolist { display: grid; gap: 2px; }
@@ -280,7 +284,31 @@ h2:focus { outline: none; }
 @keyframes wave { from { transform: rotate(-10deg); } to { transform: rotate(14deg); } }
 @keyframes bob { to { transform: translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) { .robot * { animation: none !important; } }
-.termstatus { display: inline-flex; align-items: center; gap: 8px; }
+.termstatus { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---- token-regnskab ---- */
+.desktokens { margin-top: 6px; font: 12px var(--mono); color: var(--muted); }
+.desktokens:empty { display: none; }
+.seg { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.seg .btn[aria-pressed="true"] { border-color: var(--bring); color: var(--bring); background: #17260f; }
+.tokgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0 6px; }
+.tokcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; }
+.tokcard.main { border-top: 3px solid var(--bring); }
+.toklabel { font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.tokval { font: 700 22px/1.25 var(--mono); color: var(--text); margin-top: 4px; }
+.toksub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.toktable { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.toktable th, .toktable td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; vertical-align: middle; }
+.toktable th { font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); background: var(--panel2); }
+.toktable tr:last-child td { border-bottom: 0; }
+.toktable td.num, .toktable th.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+.tokbarwrap { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.tokbar { flex: 1; height: 7px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.tokbar > i { display: block; height: 100%; background: var(--bring); border-radius: 999px; }
+.tokpct { font: 12px var(--mono); color: var(--muted); min-width: 36px; text-align: right; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--blue); cursor: pointer; font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.linkbtn:hover { color: var(--text); }
+.tokagents { display: flex; gap: 4px; flex-wrap: wrap; }
 
 @media (max-width: 860px) {
   .desks { grid-template-columns: 1fr; }

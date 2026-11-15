@@ -9,6 +9,7 @@ const { createScanner } = require('./repos');
 const { createSessions, PASTE_MAX } = require('./sessions');
 const { createGithub } = require('./github');
 const { createSkills } = require('./skills');
+const { createTokens } = require('./tokens');
 const summary = require('./summary');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -30,7 +31,12 @@ function createApp({ config, token }) {
   const port = config.port;
   const brain = createBrain(config);
   const scanner = createScanner(config, brain);
-  const sessions = createSessions(config);
+  const tokens = createTokens(config, {
+    getRepoNames: async () => (await scanner.scan(false)).repos.map((r) => r.name),
+  });
+  const sessions = createSessions(config, {
+    onSessionEvent: (event, view) => tokens.recordSession(event, view),
+  });
   const github = createGithub();
   const skills = createSkills(config);
   const headers = sec.securityHeaders(port);
@@ -76,11 +82,21 @@ function createApp({ config, token }) {
         scanner.scan(url.searchParams.get('fresh') === '1'),
         sessions.refreshWaits(),
       ]);
+      const activeSessions = sessions.list();
+      const tok = await tokens.summaryForState(activeSessions);
       return send(res, 200, {
         root: config.root, host: sessions.hostname, idleSeconds: config.idleSeconds,
         agents: config.agents.map((a) => ({ id: a.id, name: a.name })), personalSkillsDir: config.personalSkillsDir,
-        repos: data.repos, skipped: data.skipped, error: data.error, sessions: sessions.list(),
+        repos: data.repos, skipped: data.skipped, error: data.error,
+        sessions: activeSessions.map((s) => (s.kind === 'agent' ? { ...s, tokens: tok.sessionTokens[s.id] || null } : s)),
+        tokenSummary: tok.tokenSummary,
       });
+    }
+
+    if (req.method === 'GET' && route === '/api/tokens') {
+      const period = url.searchParams.get('period') || 'all';
+      const fresh = url.searchParams.get('fresh') === '1';
+      return send(res, 200, await tokens.report({ period, fresh, activeSessions: sessions.list() }));
     }
 
     if (req.method === 'GET' && route === '/api/brain') {
@@ -250,6 +266,7 @@ function createApp({ config, token }) {
     server.closeAllConnections?.();
     for (let i = 0; i < 12 && sessions.running() > 0; i += 1) await new Promise((r) => setTimeout(r, 100));
     if (sessions.running() > 0) { sessions.forceAll(); await new Promise((r) => setTimeout(r, 150)); }
+    tokens.flush();
     await done;
   }
 
