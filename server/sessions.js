@@ -4,8 +4,9 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
+const { Terminal: ScreenTerminal } = require('@xterm/headless');
 const {
-  createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone,
+  createWaitChecker, findApprovalOnScreen, inspectQuota, isTaskDone, SCREEN_QUOTA,
   CHROME_RE, FOOTER_RE, INTERRUPT_RE, BARE_PROMPT_RE, TURN_DONE_RE,
 } = require('./wait-check');
 
@@ -17,6 +18,11 @@ const BRIEF_MAX_WAIT_MS = 20000;
 // Skriver agenten slet intet efter start, ventes der lidt længere end ellers, så et langsomt program kan nå at starte.
 const BRIEF_SILENT_MS = 5000;
 const isWin = process.platform === 'win32';
+// Hvor mange linjer over den synlige skærm der også kigges på (fx et spørgsmål der lige er rullet lidt op).
+const SCREEN_EXTRA = 40;
+const SCREEN_LIMIT = 80;
+// Taster der besvarer et spørgsmål: Enter, et tal, j/n/y, Esc alene eller Ctrl+C. Piletaster (Esc + [) er ikke et svar.
+const ANSWER_RE = /^(?:[0-9yYnNjJ]|\x1b|\x03)$|[\r\n]/;
 
 function shellCommand(agentCommand) {
   if (isWin) {
@@ -67,17 +73,44 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   const isIdleAgent = (s) => s.exitCode == null && s.kind === 'agent' && Date.now() - s.lastOutputAt >= config.idleSeconds * 1000;
   const currentWait = (s) => (isIdleAgent(s) ? waitChecker.checkSync(s) : null);
 
+  // Det der står på agentens skærm lige nu – gengivet af en usynlig terminal, så slettede og overskrevne linjer er væk.
+  function screenText(s) {
+    const buf = s.screen.buffer.active;
+    const end = buf.length;
+    const out = [];
+    for (let i = Math.max(0, end - (s.rows + SCREEN_EXTRA)); i < end; i += 1) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const t = line.translateToString(true);
+      // En lang linje der er brudt over flere rækker, samles igen.
+      if (line.isWrapped && out.length) out[out.length - 1] += t; else out.push(t);
+    }
+    return out.join('\n');
+  }
+
+  // Et spørgsmål om godkendelse står åbent, fra det dukker op på skærmen, til du svarer.
+  // Baggrundsarbejde, der skriver videre imens (tests, subagenter), kan ikke lukke det – kun dit svar, eller at det forsvinder.
   function updateApprovalState(s) {
-    if (s.exitCode != null || s.kind !== 'agent') {
+    if (s.exitCode != null || s.kind !== 'agent' || s.pendingPaste) {
       s.approvalSince = null;
+      s.approvalOpen = false;
+      if (s.exitCode != null) s.prompt = null;
+      return false;
+    }
+    const found = findApprovalOnScreen(s.screenText(), { mine: mine(s), limit: SCREEN_LIMIT });
+    if (!found) {
+      s.prompt = null;
+      s.approvalSince = null;
+      s.approvalOpen = false;
       return false;
     }
     const now = Date.now();
-    if (now < s.approvalCooldownUntil || !hasApprovalPrompt(s.buffer)) {
-      s.approvalSince = null;
-      return false;
-    }
-    if (!s.approvalSince) s.approvalSince = now;
+    // Nyt spørgsmål: anden tekst, eller samme tekst én gang mere på skærmen (fx aider, der spørger igen).
+    if (!s.prompt || s.prompt.line !== found.line || found.count > s.prompt.count) { s.prompt = { line: found.line, count: found.count, at: now }; s.lastPromptAt = now; }
+    else s.prompt.count = found.count;
+    s.approvalOpen = s.lastAnswerAt < s.prompt.at;
+    if (!s.approvalOpen) { s.approvalSince = null; return false; }
+    if (!s.approvalSince) s.approvalSince = s.prompt.at;
     return true;
   }
 
@@ -88,28 +121,18 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return Date.now() - s.approvalSince >= settleMs;
   }
 
-  function updateQuotaState(s) {
-    if (s.exitCode != null || s.kind !== 'agent') {
-      s.quotaSince = null;
-      return null;
-    }
-    const now = Date.now();
-    const q = now >= s.approvalCooldownUntil ? inspectQuota(s.buffer) : null;
-    if (!q) {
-      s.quotaSince = null;
-      return null;
-    }
-    if (!s.quotaSince) s.quotaSince = now;
-    return q;
+  // Kvote-stop tælles kun, når agenten er stille, og beskeden står nederst på skærmen.
+  // Dine tastetryk lukker den ikke – først når agenten selv skriver noget nyt efter dit Enter.
+  function activeQuota(s) {
+    if (s.exitCode != null || s.kind !== 'agent' || !isIdleAgent(s)) return null;
+    return inspectQuota(s.screenText(), SCREEN_QUOTA);
   }
 
-  function activeQuota(s) {
-    const q = updateQuotaState(s);
-    if (!q) return null;
-    if (isIdleAgent(s)) return q;
-    const settleMs = Math.min(1500, Math.max(200, config.idleSeconds * 500));
-    return Date.now() - s.quotaSince >= settleMs ? q : null;
-  }
+  // Det du selv er ved at skrive, og de sidste ting du har sendt – så dine egne ord i feltet ikke læses som agentens spørgsmål.
+  const mine = (s) => [s.draft, ...s.sent];
+
+  // Har du svaret på det seneste spørgsmål, tæller det ikke længere – heller ikke hvis agenten lader det stå på skærmen.
+  const answeredPromptVisible = (s) => s.lastPromptAt > 0 && s.lastAnswerAt >= s.lastPromptAt;
 
   function status(s) {
     if (s.exitCode != null) return s.exitCode === 0 || s.killed ? 'afsluttet' : 'fejlet';
@@ -117,14 +140,18 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     if (needsApproval(s)) return 'venter';
     if (activeQuota(s)) return 'kvote';
     if (!isIdleAgent(s)) return 'arbejder';
+    // En indsat tekst venter på dit Enter – det er dig der skal handle, uanset hvad teksten indeholder.
+    if (s.pendingPaste) return 'venter';
+    // En færdig tur vinder over en proces, der kører videre i baggrunden (fx en dev-server agenten har startet).
+    if (isTaskDone(s.screenText(), { hadInput: s.hadUserInput, ignorePrompts: answeredPromptVisible(s), limit: SCREEN_LIMIT, strict: true, mine: mine(s) })) return 'faerdig';
     if (currentWait(s)) return 'afventer';
-    return isTaskDone(s.buffer, { hadInput: s.hadUserInput }) ? 'faerdig' : 'venter';
+    return 'venter';
   }
 
   function view(s) {
     const st = status(s);
     const approval = st === 'venter' && s.approvalSince != null;
-    const quota = st === 'kvote' ? inspectQuota(s.buffer) : null;
+    const quota = st === 'kvote' ? inspectQuota(s.screenText(), SCREEN_QUOTA) : null;
     const wait = st === 'afventer' ? currentWait(s) : null;
     return {
       id: s.id, repo: s.repo, kind: s.kind, agentId: s.agentId, name: s.name,
@@ -133,17 +160,16 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       needsApproval: approval,
       waitingFor: quota ? quota.waitingFor : (wait ? wait.waitingFor : null),
       waitingDetail: quota ? quota.detail : (wait ? wait.detail : null),
-      lastLine: s.kind === 'agent' ? lastLine(s.buffer, s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
+      lastLine: s.kind === 'agent' ? lastLine(s.screenText(), s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
+      // stopped: du (eller en anden fane) har selv stoppet den. fresh: du har endnu ikke skrevet noget til den.
+      stopped: !!s.killed, fresh: !s.hadUserInput, approvalSince: approval ? s.approvalSince : null,
       pendingPaste: s.pendingPaste,
       role: s.role, briefPending: !!s.pendingBrief,
     };
   }
 
   async function refreshWaits() {
-    for (const s of sessions.values()) {
-      updateApprovalState(s);
-      updateQuotaState(s);
-    }
+    for (const s of sessions.values()) updateApprovalState(s);
     const idle = [...sessions.values()].filter(isIdleAgent);
     if (idle.length) await waitChecker.checkAll(idle);
   }
@@ -178,8 +204,10 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
       queuedPaste, initialPasteTimer: null,
-      approvalSince: null, quotaSince: null, approvalCooldownUntil: 0, approvalTimer: null, buffer: '', clients: new Set(), proc,
+      approvalSince: null, approvalOpen: false, prompt: null, lastPromptAt: 0, lastAnswerAt: 0, draft: '', sent: [], approvalTimer: null, buffer: '', clients: new Set(), proc,
+      screen: new ScreenTerminal({ cols: 100, rows: 30, scrollback: 500, allowProposedApi: true, logLevel: 'off' }),
     };
+    s.screenText = () => screenText(s);
     sessions.set(s.id, s);
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
@@ -190,11 +218,15 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         s.waitState = null;
       }
       s.buffer += data;
+      s.screen.write(data);
       // Rollens beskrivelse indsættes først, når agenten har været stille et øjeblik – så er den færdig med at starte op.
       if (s.pendingBrief) { clearTimeout(s.briefTimer); s.briefTimer = setTimeout(() => deliverBrief(s), BRIEF_QUIET_MS); }
       // Husk om programmet har slået "indsæt-tilstand" til (bruges af paste nedenfor).
-      const on = s.buffer.lastIndexOf('\x1b[?2004h');
-      const off = s.buffer.lastIndexOf('\x1b[?2004l');
+      // Der kigges kun i det nye stykke (plus lidt fra før, hvis koden er delt over to stykker) – ikke hele historikken hver gang.
+      const chunk = (s.modeTail || '') + data;
+      s.modeTail = data.slice(-8);
+      const on = chunk.lastIndexOf('\x1b[?2004h');
+      const off = chunk.lastIndexOf('\x1b[?2004l');
       if (on !== -1 || off !== -1) s.bracketed = on > off;
       if (s.buffer.length > SCROLLBACK) {
         // Klip ved et linjeskift, så historikken ikke starter midt i en farvekode eller et tegn.
@@ -224,7 +256,6 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         s.approvalTimer = setTimeout(() => {
           s.approvalTimer = null;
           updateApprovalState(s);
-          updateQuotaState(s);
         }, 350);
         s.approvalTimer.unref();
       }
@@ -265,19 +296,36 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       write(data) {
         if (s.exitCode != null) return;
         s.lastInputAt = Date.now();
-        if (/[\r\n]/.test(data)) s.hadUserInput = true;
+        if (/[\r\n]/.test(data)) {
+          s.hadUserInput = true;
+          // Du har sendt noget: agenten går i gang nu, også selvom dens første svar kommer samtidig med ekkoet.
+          s.lastOutputAt = Date.now();
+          s.waitState = null;
+        }
+        // Det du er ved at skrive, huskes, så "> ja" i feltet ikke forveksles med et spørgsmål fra agenten.
+        if (/[\r\n]/.test(data)) {
+          const sent = (s.draft + data.split(/[\r\n]/)[0].replace(/[\x00-\x1f]/g, '')).trim();
+          if (sent) s.sent = [sent, ...s.sent].slice(0, 5);
+        }
+        if (/[\r\n\x03\x15]/.test(data)) s.draft = '';
+        else if (data === '\x7f' || data === '\b') s.draft = s.draft.slice(0, -1);
+        else if (!/\x1b/.test(data)) s.draft = (s.draft + data.replace(/[\x00-\x1f]/g, '')).slice(-500);
         // Enter, Ctrl+C eller Ctrl+U betyder, at en indsat tekst er sendt eller slettet.
         if (/[\r\n\x03\x15]/.test(data)) s.pendingPaste = false;
-        if (s.kind === 'agent' && /[\r\n\x03\x1b yYnN1-9]/.test(data)) {
+        // Et svar lukker et åbent spørgsmål med det samme. Piletaster i menuen gør ikke.
+        if (s.kind === 'agent' && ANSWER_RE.test(data)) {
+          s.lastAnswerAt = Date.now();
+          // Har du lige svaret på et spørgsmål, går agenten i gang nu – også selvom svaret var et tal uden Enter.
+          if (s.approvalOpen) { s.lastOutputAt = Date.now(); s.waitState = null; }
           s.approvalSince = null;
-          s.quotaSince = null;
-          s.approvalCooldownUntil = Date.now() + 600;
+          s.approvalOpen = false;
         }
         s.proc.write(data);
       },
       resize(cols, rows) {
         if (s.exitCode != null || (cols === s.cols && rows === s.rows)) return;
         s.cols = cols; s.rows = rows; s.lastResizeAt = Date.now();
+        try { s.screen.resize(cols, rows); } catch { /* lukket imens */ }
         try { s.proc.resize(cols, rows); } catch { /* lukket imens */ }
       },
       detach() { s.clients.delete(client); },
@@ -324,9 +372,13 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     s.lastInputAt = Date.now();
     s.hadUserInput = true;
     s.pendingPaste = false;
+    // Hurtig-svar fra overblikket er et svar på spørgsmålet, ligesom når du taster det selv.
+    s.lastAnswerAt = Date.now();
+    s.lastOutputAt = Date.now();
+    s.waitState = null;
     s.approvalSince = null;
-    s.quotaSince = null;
-    s.approvalCooldownUntil = Date.now() + 600;
+    s.approvalOpen = false;
+    s.draft = '';
     s.proc.write(KEYS[key]);
     return 'ok';
   }
@@ -358,7 +410,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   function remove(id) {
     const s = get(id);
     if (!s) return false;
-    if (s.exitCode == null) kill(s); else sessions.delete(id);
+    if (s.exitCode == null) kill(s); else { sessions.delete(id); try { s.screen.dispose(); } catch { /* allerede lukket */ } }
     return true;
   }
 
