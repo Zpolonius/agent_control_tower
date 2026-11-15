@@ -1483,14 +1483,111 @@
         i.labels.map((l) => chip(l)))))));
   }
 
+  function savedSendRole(repo, key) {
+    try { return localStorage.getItem(`ct-${key}-role:${repo}`) || ''; } catch { return ''; }
+  }
+  function saveSendRole(repo, key, roleId) {
+    try { localStorage.setItem(`ct-${key}-role:${repo}`, roleId); } catch { /* privat tilstand */ }
+  }
+
+  // Vælger både modtager (en kørende agent i repoet ELLER start af en ny agent) og en valgfri rolle.
+  function sendTargetControls(repo, roles, roleKey, onChange) {
+    const running = liveAgents(repo);
+    const configured = (state.data && state.data.agents) || [];
+    const validTargets = new Set([
+      ...running.map((a) => `session:${a.id}`),
+      ...configured.map((a) => `new:${a.id}`),
+    ]);
+    let currentTarget = state.target;
+    if (currentTarget && !currentTarget.includes(':') && running.some((a) => a.id === currentTarget)) {
+      currentTarget = `session:${currentTarget}`;
+    }
+    if (!currentTarget || !validTargets.has(currentTarget)) {
+      if (running.length) currentTarget = `session:${running[0].id}`;
+      else if (configured.length) currentTarget = `new:${roleAgent() || configured[0].id}`;
+      else currentTarget = '';
+    }
+    state.target = currentTarget;
+
+    const roleList = Array.isArray(roles) ? roles : [];
+    const savedR = savedSendRole(repo, roleKey);
+    let currentRole = roleList.some((r) => r.id === savedR) ? savedR : '';
+
+    const targetSelects = [];
+    const roleSelects = [];
+
+    function syncAll() {
+      for (const s of targetSelects) if (s.value !== currentTarget) s.value = currentTarget;
+      for (const s of roleSelects) if (s.value !== currentRole) s.value = currentRole;
+      if (onChange) onChange();
+    }
+
+    function makeBar(suffix) {
+      const tSel = h('select', {
+        id: `${roleKey}target-${suffix}`,
+        onchange: (e) => {
+          currentTarget = e.target.value;
+          state.target = currentTarget;
+          if (currentTarget.startsWith('new:')) setRoleAgent(currentTarget.slice(4));
+          syncAll();
+        },
+      },
+        running.length ? h('optgroup', { label: 'Kørende agenter i repoet' },
+          running.map((a) => h('option', { value: `session:${a.id}`, selected: currentTarget === `session:${a.id}` }, `${a.name} (startet ${ago(a.startedAt)})`))) : null,
+        configured.length ? h('optgroup', { label: 'Start ny agent' },
+          configured.map((a) => h('option', { value: `new:${a.id}`, selected: currentTarget === `new:${a.id}` }, `+ Start ny ${a.name}`))) : null);
+      targetSelects.push(tSel);
+
+      const rSel = roleList.length ? h('select', {
+        id: `${roleKey}role-${suffix}`,
+        onchange: (e) => {
+          currentRole = e.target.value;
+          saveSendRole(repo, roleKey, currentRole);
+          syncAll();
+        },
+      },
+        h('option', { value: '', selected: currentRole === '' }, 'Ingen fast rolle'),
+        roleList.map((r) => h('option', { value: r.id, selected: r.id === currentRole }, `${r.name}${r.source === 'repo' ? ' (repo)' : ''}`))) : null;
+      if (rSel) roleSelects.push(rSel);
+
+      return h('div', { class: 'sendtargets' },
+        configured.length || running.length
+          ? h('label', { class: 'picker', for: `${roleKey}target-${suffix}` }, 'Send til ', tSel)
+          : h('span', { class: 'picker', text: 'Ingen agenter konfigureret' }),
+        rSel ? h('label', { class: 'picker', for: `${roleKey}role-${suffix}` }, 'Rolle ', rSel) : null);
+    }
+
+    function getTargetLabel() {
+      if (currentTarget.startsWith('new:')) {
+        const a = configured.find((x) => x.id === currentTarget.slice(4)) || configured[0];
+        return a ? `starter ny ${a.name}` : 'starter ny agent';
+      }
+      if (currentTarget.startsWith('session:')) {
+        const s = running.find((x) => x.id === currentTarget.slice(8)) || running[0];
+        return s ? `sendes til ${s.name}` : 'sendes til kørende agent';
+      }
+      return 'sendes til agent';
+    }
+
+    return {
+      makeBar,
+      getTarget: () => currentTarget,
+      getRoleId: () => currentRole,
+      getRoleName: () => (roleList.find((r) => r.id === currentRole) || {}).name || '',
+      getTargetLabel,
+      getOpts: () => ({ target: currentTarget, roleId: currentRole }),
+    };
+  }
+
   async function issueDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'issues' && state.issue[repo] === number;
     const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.issue[repo]; syncUrl(false); issuesPanel(panel); } }, '← Alle issues');
-    let issue, skills;
+    let issue, skills, rolesData;
     try {
-      [issue, skills] = await Promise.all([
+      [issue, skills, rolesData] = await Promise.all([
         api(`/api/issues/detail?repo=${encodeURIComponent(repo)}&number=${number}`),
         api(`/api/skills?repo=${encodeURIComponent(repo)}`).catch(() => ({ project: [], personal: [] })),
+        api(`/api/roles?repo=${encodeURIComponent(repo)}`).catch(() => ({ roles: [] })),
       ]);
     } catch (err) {
       if (still()) panel.replaceChildren(back, h('p', { class: 'alert', role: 'alert', text: err.message }));
@@ -1505,27 +1602,40 @@
     const guess = skills.project.find((s) => s.source === 'skill' && /issue/i.test(s.name) && names.includes(s.name));
     let chosen = saved !== undefined && (saved === '' || names.includes(saved)) ? saved : (guess ? guess.name : '');
     const preview = h('p', { class: 'sendpreview', 'aria-live': 'polite' });
-    const text = () => (chosen ? `/${chosen} ${issue.number}` : issuePrompt(issue));
-    const show = () => { preview.textContent = chosen ? `Der sendes: /${chosen} ${issue.number}` : 'Der sendes: issuets titel og beskrivelse med en kort instruktion.'; };
+    let targetCtrl = null;
+    const text = () => {
+      const roleId = targetCtrl && targetCtrl.getRoleId();
+      if (roleId) {
+        return chosen ? `${issuePrompt(issue)}\n\nBrug gerne skillen /${chosen} til opgaven.` : issuePrompt(issue);
+      }
+      return chosen ? `/${chosen} ${issue.number}` : issuePrompt(issue);
+    };
+    const show = () => {
+      const roleName = targetCtrl && targetCtrl.getRoleName();
+      const targetLbl = targetCtrl ? targetCtrl.getTargetLabel() : 'sendes til agent';
+      if (roleName) {
+        preview.textContent = `Der sendes: Rollen »${roleName}« med issuets titel og beskrivelse${chosen ? ` (+ /${chosen})` : ''} · ${targetLbl}.`;
+      } else {
+        preview.textContent = chosen
+          ? `Der sendes: /${chosen} ${issue.number} · ${targetLbl}.`
+          : `Der sendes: issuets titel og beskrivelse med en kort instruktion · ${targetLbl}.`;
+      }
+    };
+    targetCtrl = sendTargetControls(repo, rolesData && rolesData.roles, 'issue', show);
     const select = h('select', { id: 'issueskill', onchange: (e) => { chosen = e.target.value; saveSkill(repo, chosen); show(); } },
       h('option', { value: '', selected: chosen === '' }, 'Ingen skill – send beskrivelsen'),
       names.map((n) => h('option', { value: n, selected: n === chosen }, `/${n}`)));
     show();
-    const agents = liveAgents(repo);
-    const firstAgent = state.data && state.data.agents && state.data.agents[0];
-    const picker = agents.length > 1
-      ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
-        agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
     panel.replaceChildren(...[
-      h('div', { class: 'panelbar' }, back, picker),
+      h('div', { class: 'panelbar' }, back, targetCtrl.makeBar('top')),
       h('h3', { class: 'plain' }, `#${issue.number} ${issue.title} `, issue.labels.map((l) => chip(l))),
       h('p', { class: 'sub' }, `@${issue.author} · opdateret ${ago(Date.parse(issue.updatedAt))} · `,
         /^https:\/\/github\.com\//.test(issue.url) ? h('a', { href: issue.url, target: '_blank', rel: 'noopener noreferrer' }, 'Åbn på GitHub') : null),
       h('div', { class: 'sendbox' },
-        h('label', { for: 'issueskill', text: 'Løs med skill' }), select,
-        h('button', { type: 'button', class: 'btn primary', onclick: () => sendToAgent(text(), 'Issuet er indsat hos agenten. Læs det igennem, og tryk Enter for at sende.') }, 'Send til agent'),
-        preview, noAgentNote(repo)),
+        targetCtrl.makeBar('box'),
+        h('label', { for: 'issueskill', text: 'Skill' }), select,
+        h('button', { type: 'button', class: 'btn primary', onclick: () => sendToAgent(text(), 'Issuet er indsat hos agenten. Læs det igennem, og tryk Enter for at sende.', targetCtrl.getOpts()) }, 'Send til agent'),
+        preview),
       h('article', { class: 'brainview issuebody' }, issue.body.trim() ? window.renderMarkdown(issue.body) : h('p', { class: 'empty', text: 'Issuet har ingen beskrivelse.' })),
       issue.comments.length ? h('h3', { text: `Kommentarer (${issue.comments.length})` }) : null,
       issue.comments.length ? h('ul', { class: 'reviews' }, issue.comments.map((c) => h('li', { class: 'review' },
@@ -1606,32 +1716,46 @@
     return parts.join('\n\n');
   }
 
-  async function sendToAgent(text, done) {
+  async function sendToAgent(text, done, opts) {
     const agents = liveAgents(state.repo);
-    if (!agents.length) {
-      if (!state.data || !state.data.agents || !state.data.agents.length) {
+    const configured = (state.data && state.data.agents) || [];
+    const targetSpec = (opts && opts.target) || state.target || '';
+    const roleId = (opts && opts.roleId) || '';
+
+    const wantNew = targetSpec.startsWith('new:') || !agents.length;
+    if (wantNew) {
+      if (!configured.length) {
         toast('Start en agent i dette repo først med knapperne øverst – så kan teksten sendes til den.', true);
         return false;
       }
-      const first = state.data.agents[0];
+      const wantedId = targetSpec.startsWith('new:') ? targetSpec.slice(4) : roleAgent();
+      const agentObj = configured.find((a) => a.id === wantedId) || configured[0];
       try {
-        const s = await api('/api/sessions', { method: 'POST', body: { repo: state.repo, kind: 'agent', agentId: first.id, initialPaste: text } });
+        const body = roleId
+          ? { repo: state.repo, kind: 'agent', agentId: agentObj.id, roleId, input: text }
+          : { repo: state.repo, kind: 'agent', agentId: agentObj.id, initialPaste: text };
+        const s = await api('/api/sessions', { method: 'POST', body });
         state.sig = null;
         await refresh();
         state.view = `term:${s.id}`;
         syncUrl(false);
         renderTabs();
         renderPanel();
-        toast(`Startede ${first.name} og indsatte teksten. Tryk Enter i terminalen for at sende.`);
+        toast(roleId
+          ? `Startede ${s.name}. Opgaven indsættes, når agenten er klar – læs den, og tryk Enter.`
+          : `Startede ${agentObj.name} og indsatte teksten. Tryk Enter i terminalen for at sende.`);
         return true;
       } catch (err) {
         toast(err.message, true);
         return false;
       }
     }
-    const target = agents.find((a) => a.id === state.target) || agents[0];
+
+    const sid = targetSpec.startsWith('session:') ? targetSpec.slice(8) : targetSpec;
+    const target = agents.find((a) => a.id === sid) || agents[0];
     try {
-      await api(`/api/sessions/${target.id}/paste`, { method: 'POST', body: { text } });
+      const body = roleId ? { text, roleId } : { text };
+      await api(`/api/sessions/${target.id}/paste`, { method: 'POST', body });
       state.sig = null;
       await refresh();
       state.view = `term:${target.id}`;
@@ -1654,8 +1778,13 @@
   async function prDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'prs' && state.pr[repo] === number;
     const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.pr[repo]; syncUrl(false); prPanel(panel); } }, '← Alle pull requests');
-    let pr;
-    try { pr = await api(`/api/prs/detail?repo=${encodeURIComponent(repo)}&number=${number}`); } catch (err) {
+    let pr, rolesData;
+    try {
+      [pr, rolesData] = await Promise.all([
+        api(`/api/prs/detail?repo=${encodeURIComponent(repo)}&number=${number}`),
+        api(`/api/roles?repo=${encodeURIComponent(repo)}`).catch(() => ({ roles: [] })),
+      ]);
+    } catch (err) {
       if (still()) panel.replaceChildren(back, h('p', { class: 'alert', role: 'alert', text: err.message }));
       return;
     }
@@ -1687,12 +1816,7 @@
       })),
     ].filter((it) => (it.body && it.body.trim()) || (it.kind === 'Review' && it.rawState !== 'COMMENTED'));
 
-    const agents = liveAgents(repo);
-    const firstAgent = state.data && state.data.agents && state.data.agents[0];
-    const picker = agents.length > 1
-      ? h('label', { class: 'picker' }, 'Send til ', h('select', { onchange: (e) => { state.target = e.target.value; } },
-        agents.map((a) => h('option', { value: a.id, selected: a.id === state.target }, `${a.name} (startet ${ago(a.startedAt)})`))))
-      : h('span', { class: 'picker', text: agents.length ? `Sendes til: ${agents[0].name}` : (firstAgent ? `Starter automatisk: ${firstAgent.name}` : 'Ingen agent kører i dette repo endnu') });
+    const targetCtrl = sendTargetControls(repo, rolesData && rolesData.roles, 'pr');
     const dec = DECISION[pr.decision];
     const stateChip = pr.state === 'CLOSED' ? chip('Lukket', 'fail')
       : pr.state === 'MERGED' ? chip('Flettet', 'ok')
@@ -1752,7 +1876,7 @@
           commits: selectedCommits,
           items: selectedItems,
           userText: textarea.value,
-        }));
+        }), null, targetCtrl.getOpts());
       },
     }, 'Send review til agent');
 
@@ -1800,7 +1924,7 @@
       textarea,
       h('div', { class: 'composerbar' },
         sendBtn,
-        noAgentNote(repo),
+        targetCtrl.makeBar('comp'),
       ),
     );
 
@@ -1815,7 +1939,7 @@
                 h('strong', { text: `@${it.author}` }),
                 ` · ${it.kind}${it.state ? ` · ${it.state}` : ''}${it.at ? ` · ${ago(Date.parse(it.at))}` : ''}`,
               ),
-              h('button', { type: 'button', class: 'btn small', onclick: () => sendToAgent(prompt(pr, [it])) }, 'Send til agent'),
+              h('button', { type: 'button', class: 'btn small', onclick: () => sendToAgent(prompt(pr, [it]), null, targetCtrl.getOpts()) }, 'Send til agent'),
             ),
             it.where ? h('p', { class: 'where', text: it.where }) : null,
             it.diffHunk ? h('pre', { class: 'diffhunk' }, h('code', { text: it.diffHunk })) : null,
@@ -1829,7 +1953,7 @@
     updateComposer();
 
     panel.replaceChildren(...[
-      h('div', { class: 'panelbar' }, back, picker),
+      h('div', { class: 'panelbar' }, back, targetCtrl.makeBar('top')),
       h('h3', { class: 'plain' },
         `#${pr.number} ${pr.title} `,
         pr.draft ? chip('Kladde', 'muted') : null,

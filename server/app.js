@@ -263,12 +263,21 @@ function createApp({ config, token }) {
       let body;
       try { body = await readJson(req, 512 * 1024); } catch (err) { return fail(res, err.status || 400, err.message); }
       if (typeof body.text !== 'string') return fail(res, 400, 'Mangler tekst');
-      const result = sessions.paste(pm[1], body.text, body.force === true);
+      let text = body.text;
+      if (body.roleId != null && body.roleId !== '') {
+        if (typeof body.roleId !== 'string') return fail(res, 400, 'Ugyldig rolle');
+        const s = sessions.get(pm[1]);
+        if (!s || s.exitCode != null) return fail(res, 404, 'Agenten kører ikke længere');
+        const built = roles.build(s.cwd, s.repo, body.roleId, text);
+        if (!built) return fail(res, 400, 'Ukendt rolle');
+        text = built.text;
+      }
+      const result = sessions.paste(pm[1], text, body.force === true);
       if (result === 'ok') return send(res, 200, { ok: true });
       if (result === 'pending') return send(res, 409, { error: 'Der ligger allerede en usendt tekst hos agenten.', pending: true });
       return fail(res, { gone: 404, 'too-long': 413 }[result] || 400, {
         gone: 'Agenten kører ikke længere', 'not-agent': 'Tekst kan kun sendes til en agent, ikke en almindelig terminal', empty: 'Der var ingen tekst at sende',
-        'too-long': `Teksten er for lang til at sende på én gang (${body.text.length.toLocaleString('da-DK')} tegn, maks. ${PASTE_MAX.toLocaleString('da-DK')}). Send færre kommentarer ad gangen.`,
+        'too-long': `Teksten er for lang til at sende på én gang (${text.length.toLocaleString('da-DK')} tegn, maks. ${PASTE_MAX.toLocaleString('da-DK')}). Send færre kommentarer ad gangen.`,
       }[result]);
     }
 
