@@ -4,7 +4,7 @@
   --bg: #0d1012; --panel: #14181b; --panel2: #1b2125; --line: #2c343a; --line2: #3a444c;
   --text: #e6eaed; --muted: #a3adb5;
   --posten: #E32D22; --posten-text: #ff7a71; --bring: #6EC943; --bring-hover: #84d65d;
-  --amber: #f2b84b; --blue: #7db8ff;
+  --amber: #f2b84b; --blue: #7db8ff; --quota: #ff944d;
   /* Kant på knapper og felter: lys nok til at kunne ses mod baggrunden (mindst 3:1). */
   --ctl: #6f7b85;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
@@ -43,6 +43,7 @@ h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; font-fam
 .summary .work { border-color: var(--bring); } .summary .work strong { color: var(--bring); }
 .summary .extwait { border-color: var(--blue); } .summary .extwait strong { color: var(--blue); }
 .summary .wait { border-color: var(--amber); } .summary .wait strong { color: var(--amber); }
+.summary .quota { border-color: var(--quota); } .summary .quota strong { color: var(--quota); }
 .summary .ready { border-color: #5ee2a0; } .summary .ready strong { color: #5ee2a0; }
 
 .layout { flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 0; }
@@ -86,6 +87,7 @@ h3.plain { font: 600 17px var(--sans); text-transform: none; letter-spacing: 0; 
 .badge.work { border-color: var(--bring); } .badge.work .glyph { color: var(--bring); animation: pulse 1.4s ease-in-out infinite; }
 .badge.extwait { border-color: var(--blue); } .badge.extwait .glyph { color: var(--blue); animation: pulse 2.2s ease-in-out infinite; }
 .badge.wait { border-color: var(--amber); } .badge.wait .glyph { color: var(--amber); }
+.badge.quota { border-color: var(--quota); } .badge.quota .glyph { color: var(--quota); }
 .badge.ready { border-color: #5ee2a0; } .badge.ready .glyph { color: #5ee2a0; }
 .badge.open .glyph { color: var(--blue); }
 .badge.done { color: var(--muted); }
@@ -227,6 +229,7 @@ h2:focus { outline: none; }
 .next.idle { justify-content: flex-start; gap: 20px; }
 .next.idle .nextbody { flex: 1; min-width: 220px; }
 .next.wait { border-color: #7a5f24; border-left-color: var(--amber); background: linear-gradient(100deg, #2b2413, var(--panel)); }
+.next.quota { border-color: #7a4624; border-left-color: var(--quota); background: linear-gradient(100deg, #2b1a11, var(--panel)); }
 .next.extwait { border-color: #365a82; border-left-color: var(--blue); background: linear-gradient(100deg, #13202e, var(--panel)); }
 .next.fail { border-color: #7a2a25; border-left-color: var(--posten); background: linear-gradient(100deg, #2a1513, var(--panel)); }
 .next.work { border-color: #3d6b2a; border-left-color: var(--bring); background: linear-gradient(100deg, #17260f, var(--panel)); }
@@ -241,6 +244,7 @@ h2:focus { outline: none; }
 .desks { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-bottom: 4px; }
 .deskcard { --tone: var(--line2); display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto; gap: 4px 14px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--tone); border-radius: 12px; padding: 14px; }
 .deskcard.work { --tone: var(--bring); } .deskcard.extwait { --tone: var(--blue); } .deskcard.wait { --tone: var(--amber); box-shadow: 0 0 0 1px #7a5f24; }
+.deskcard.quota { --tone: var(--quota); box-shadow: 0 0 0 1px #7a4624; }
 .deskcard.ready { --tone: #5ee2a0; box-shadow: 0 0 0 1px #2f7d57; } .deskcard.fail { --tone: var(--posten-text); } .deskcard.done { --tone: #7d8891; }
 .deskcard .btn { grid-column: 1 / -1; margin-top: 8px; align-self: end; }
 .deskname { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 15px; }
@@ -252,7 +256,7 @@ h2:focus { outline: none; }
 
 .robot { width: 120px; height: 84px; flex: none; --tone: #7d8891; }
 .robot.mini { width: 48px; height: 34px; }
-.robot.work { --tone: var(--bring); } .robot.extwait { --tone: var(--blue); } .robot.wait { --tone: var(--amber); } .robot.ready { --tone: #5ee2a0; } .robot.fail { --tone: var(--posten-text); }
+.robot.work { --tone: var(--bring); } .robot.extwait { --tone: var(--blue); } .robot.wait { --tone: var(--amber); } .robot.quota { --tone: var(--quota); } .robot.ready { --tone: #5ee2a0; } .robot.fail { --tone: var(--posten-text); }
 .robot .desk { fill: var(--ctl); } .robot .lapbase { fill: #55616b; }
 .robot .screen { fill: #0b0d0f; stroke: #55616b; stroke-width: 1.5; }
 .robot .code { fill: var(--ctl); }

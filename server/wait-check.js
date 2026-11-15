@@ -28,19 +28,14 @@ const INTERRUPT_RE = /\b(esc to interrupt|ctrl\+c to interrupt|ctrl\+b to run in
 const CHROME_RE = /^[─━═╭╮╰╯│┃|+`~\-=_.\s]+$/;
 const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift\+tab to cycle\b|logout$|(?:[⏵⏸▶►▸]+\s*)?(?:bypass permissions|accept edits|plan mode)\s+on\b)/i;
 const USER_WAIT_RE = /\b((?:waiting|awaiting)\s+(?:for\s+)?(?:user|you|your|input|reply|response|confirmation|approval|permission|decision)|venter på (?:dig|dit svar|svar fra dig|godkendelse|tilladelse|input))\b/i;
-<<<<<<< HEAD
-const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
-const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
-const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
-=======
 const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|(?:needs|requires) (?:your )?(?:approval|permission|confirmation)|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|type here to tell|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
 const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run\s+(?:once|this(?:\s+command)?)|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
+const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
 const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
->>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
+const QUOTA_RE = /\b(individual quota reached|please upgrade your subscription to increase your limits|quota (?:reached|exceeded|exhausted|used)|(?:usage|session|rate|plan|5-hour|weekly|daily) limit (?:reached|exceeded)|you(?:'ve| have) (?:hit|reached) your (?:usage )?limit|kvote(?:n er)? (?:nået|opbrugt|brugt))\b/i;
+const QUOTA_RESET_RE = /\b(resets?(?:\s+(?:in|at|on)\b)?[^.\r\n]{0,60}|nulstilles\b[^.\r\n]{0,60})/i;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
 const INTERRUPTED_RE = /\b(request interrupted|interrupted by user|aborted|cancelled|canceled)\b/i;
@@ -290,10 +285,6 @@ function collapseStatusRedraws(lines) {
   return out;
 }
 
-function isUserWaitLine(line) {
-  return USER_PROMPT_RE.test(line) || YES_NO_RE.test(line) || CHOICE_RE.test(line) || USER_WAIT_RE.test(line);
-}
-
 function splitTurnLines(buffer) {
   const lines = cleanLines(buffer).slice(-20);
   if (!lines.length) return { lines: [], turnStart: 0, sawTurnDone: false, turnLines: [] };
@@ -325,6 +316,45 @@ function hasApprovalPrompt(buffer) {
   return findActivePromptIndex(turnLines) !== -1;
 }
 
+function findActiveQuotaIndex(turnLines) {
+  const minIdx = Math.max(0, turnLines.length - 11);
+  for (let i = turnLines.length - 1; i >= minIdx; i -= 1) {
+    if (!QUOTA_RE.test(turnLines[i])) continue;
+    const after = turnLines.slice(i + 1);
+    const superseded = after.some((l) => (isSpinnerLine(l) && !BG_SPINNER_RE.test(l)) || COMPLETION_RE.test(l));
+    return superseded ? -1 : i;
+  }
+  return -1;
+}
+
+function inspectQuota(buffer) {
+  const { turnLines } = splitTurnLines(buffer);
+  const idx = findActiveQuotaIndex(turnLines);
+  if (idx === -1) return null;
+  const line = turnLines[idx];
+  const windowLines = turnLines
+    .slice(idx, Math.min(turnLines.length, idx + 3))
+    .filter((l) => !BARE_PROMPT_RE.test(l));
+  const selfReset = line.match(QUOTA_RESET_RE);
+  const nextReset = !selfReset ? windowLines.slice(1).join(' ').match(QUOTA_RESET_RE) : null;
+  const resetInfo = (selfReset ? selfReset[1] : nextReset ? nextReset[1] : '').trim();
+  let rawDetail = line;
+  if (resetInfo) {
+    const candidate = selfReset ? line : `${line} · ${resetInfo}`;
+    if (candidate.length > 80) {
+      const head = /individual quota reached/i.test(line) ? 'Individual quota reached' : 'Quota reached';
+      rawDetail = `${head} · ${resetInfo}`;
+    } else {
+      rawDetail = candidate;
+    }
+  }
+  return {
+    waitingFor: 'quota reset',
+    resetText: resetInfo || null,
+    detail: sanitizeDetail(rawDetail) || 'Quota used – waiting for reset',
+  };
+}
+
 function inspectBuffer(buffer) {
   const { turnLines } = splitTurnLines(buffer);
   if (!turnLines.length) return null;
@@ -333,13 +363,8 @@ function inspectBuffer(buffer) {
   const hasInterrupt = turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l));
   const hasSpinner = recentBottom.some(isSpinnerLine);
 
-<<<<<<< HEAD
-  // Eksplicitte godkendelses-/bruger-prompts i bunden vinder altid.
-  if (hasExplicitUserPrompt(recentBottom)) {
-=======
-  // Eksplicitte godkendelses-/bruger-prompts vinder altid – også når baggrundsopgaver kører.
-  if (findActivePromptIndex(turnLines) !== -1) {
->>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
+  // Eksplicitte godkendelses-/bruger-prompts og kvote-stop vinder altid – også når baggrundsopgaver kører.
+  if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) {
     return null;
   }
 
@@ -357,12 +382,6 @@ function inspectBuffer(buffer) {
     activeTail.push(l);
   }
   if (!activeTail.length) return null;
-
-  // Flerlinje-kommandoer kan skubbe godkendelsesspørgsmålet længere op end de sidste 6 linjer.
-  const promptIdx = activeTail.findIndex(isUserWaitLine);
-  if (promptIdx >= 0 && !activeTail.slice(0, promptIdx).some(isSpinnerLine)) {
-    return null;
-  }
 
   for (const rule of BUFFER_RULES) {
     const match = activeTail.find((l) => rule.re.test(l));
@@ -390,7 +409,7 @@ function isTaskDone(buffer, { hadInput = false } = {}) {
   const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer);
   if (!lines.length) return false;
 
-  if (findActivePromptIndex(turnLines) !== -1) return false;
+  if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) return false;
   if (turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l))) return false;
   if (turnLines.slice(-6).some(isSpinnerLine)) return false;
 
@@ -438,7 +457,7 @@ function createWaitChecker({ query = queryProcesses } = {}) {
     if (!idleSessions.length) return;
     const procs = await snapshot();
     for (const s of idleSessions) {
-      if (hasApprovalPrompt(s.buffer)) {
+      if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) {
         s.waitState = null;
         continue;
       }
@@ -449,7 +468,7 @@ function createWaitChecker({ query = queryProcesses } = {}) {
   }
 
   function checkSync(s) {
-    if (hasApprovalPrompt(s.buffer)) return null;
+    if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) return null;
     return s.waitState || inspectBuffer(s.buffer);
   }
 
@@ -461,6 +480,7 @@ module.exports = {
   inspectProcessTree,
   inspectBuffer,
   hasApprovalPrompt,
+  inspectQuota,
   isTaskDone,
   sanitizeDetail,
 };
