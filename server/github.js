@@ -21,14 +21,37 @@ function gh(cwd, args) {
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 const login = (a) => (a && typeof a.login === 'string' ? a.login : 'ukendt');
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const commitAuthor = (c) => {
+  if (Array.isArray(c.authors) && c.authors.length) {
+    const a = c.authors[0];
+    if (a && typeof a.login === 'string') return a.login;
+    if (a && typeof a.name === 'string') return a.name;
+  }
+  if (c.author) {
+    if (typeof c.author === 'string') return c.author;
+    if (typeof c.author.login === 'string') return c.author.login;
+    if (typeof c.author.name === 'string') return c.author.name;
+  }
+  return 'ukendt';
+};
+const commitAt = (c) => str(c && (c.authoredDate || c.committedDate || c.at), 40);
+const mapCheck = (c) => {
+  if (!c || typeof c !== 'object') return null;
+  const name = str(c.name || c.context, 200);
+  if (!name) return null;
+  const status = str(c.status || (c.state === 'PENDING' ? 'PENDING' : (c.state ? 'COMPLETED' : '')), 40);
+  const conclusion = str(c.conclusion || (c.state && c.state !== 'PENDING' ? c.state : ''), 40);
+  return { name, status, conclusion };
+};
 
-function createGithub() {
+function createGithub(deps) {
+  const runner = typeof deps === 'function' ? deps : (deps && typeof deps.gh === 'function' ? deps.gh : gh);
   const cache = new Map();
 
   async function list(repo, cwd, force) {
     const hit = cache.get(repo);
     if (!force && hit && Date.now() - hit.at < 60000) return hit.data;
-    const r = await gh(cwd, ['pr', 'list', '--limit', '30', '--json', 'number,title,headRefName,reviewDecision,isDraft,updatedAt,url,author']);
+    const r = await runner(cwd, ['pr', 'list', '--limit', '30', '--json', 'number,title,headRefName,reviewDecision,isDraft,updatedAt,url,author']);
     const rows = r.ok ? parse(r.out) : null;
     const data = !r.ok ? { available: false, reason: r.reason, prs: [] }
       : !Array.isArray(rows) ? { available: false, reason: 'Uventet svar fra GitHub', prs: [] }
@@ -43,8 +66,8 @@ function createGithub() {
   async function detail(cwd, number) {
     const n = String(number);
     const [view, inline] = await Promise.all([
-      gh(cwd, ['pr', 'view', n, '--json', 'number,title,url,headRefName,reviewDecision,reviews,comments']),
-      gh(cwd, ['api', `repos/{owner}/{repo}/pulls/${n}/comments`, '--paginate']),
+      runner(cwd, ['pr', 'view', n, '--json', 'number,title,url,headRefName,baseRefName,reviewDecision,isDraft,state,body,additions,deletions,changedFiles,statusCheckRollup,commits,reviews,comments']),
+      runner(cwd, ['api', `repos/{owner}/{repo}/pulls/${n}/comments`, '--paginate']),
     ]);
     const pr = view.ok ? parse(view.out) : null;
     if (!pr) return { available: false, reason: view.reason || 'Uventet svar fra GitHub' };
@@ -52,12 +75,26 @@ function createGithub() {
     return {
       available: true,
       number: Number(pr.number), title: str(pr.title, 300), url: str(pr.url, 500),
-      branch: str(pr.headRefName, 200), decision: str(pr.reviewDecision, 40),
+      branch: str(pr.headRefName, 200), baseBranch: str(pr.baseRefName || pr.baseBranch, 200),
+      decision: str(pr.reviewDecision, 40), state: str(pr.state, 40), draft: !!(pr.isDraft ?? pr.draft),
+      body: str(pr.body, 50000),
+      additions: Number.isInteger(pr.additions) ? pr.additions : (Number(pr.additions) || 0),
+      deletions: Number.isInteger(pr.deletions) ? pr.deletions : (Number(pr.deletions) || 0),
+      changedFiles: Number.isInteger(pr.changedFiles) ? pr.changedFiles : (Number(pr.changedFiles) || 0),
+      checks: (Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []).map(mapCheck).filter(Boolean),
+      commits: (Array.isArray(pr.commits) ? pr.commits.slice(-50) : []).map((c) => ({
+        oid: str(c.oid || c.sha, 100),
+        messageHeadline: str(c.messageHeadline || c.message || '', 500),
+        messageBody: str(c.messageBody, 10000),
+        author: commitAuthor(c),
+        at: commitAt(c),
+      })),
       reviews: (pr.reviews || []).map((r) => ({ author: login(r.author), state: str(r.state, 40), body: str(r.body, 20000), at: str(r.submittedAt, 40) }))
-        .filter((r) => r.body || r.state !== 'COMMENTED'),
+        .filter((r) => (r.body && r.body.trim()) || r.state !== 'COMMENTED'),
       comments: (pr.comments || []).map((c) => ({ author: login(c.author), body: str(c.body, 20000), at: str(c.createdAt, 40) })),
       inline: Array.isArray(inl) ? inl.map((c) => ({ author: login(c.user), path: str(c.path, 500),
         line: Number.isInteger(c.line) ? c.line : (Number.isInteger(c.original_line) ? c.original_line : null),
+        diffHunk: str(c.diff_hunk ?? c.diffHunk, 10000),
         body: str(c.body, 20000), at: str(c.created_at, 40) })) : [],
       inlineMissing: !Array.isArray(inl),
     };
@@ -69,7 +106,7 @@ function createGithub() {
     const key = `issues:${repo}`;
     const hit = cache.get(key);
     if (!force && hit && Date.now() - hit.at < 60000) return hit.data;
-    const r = await gh(cwd, ['issue', 'list', '--state', 'open', '--limit', '50', '--json', 'number,title,labels,assignees,updatedAt,url,author,comments']);
+    const r = await runner(cwd, ['issue', 'list', '--state', 'open', '--limit', '50', '--json', 'number,title,labels,assignees,updatedAt,url,author,comments']);
     const rows = r.ok ? parse(r.out) : null;
     const data = !r.ok ? { available: false, reason: r.reason, issues: [] }
       : !Array.isArray(rows) ? { available: false, reason: 'Uventet svar fra GitHub', issues: [] }
@@ -83,7 +120,7 @@ function createGithub() {
   }
 
   async function issue(cwd, number) {
-    const r = await gh(cwd, ['issue', 'view', String(number), '--json', 'number,title,body,labels,url,author,comments,updatedAt']);
+    const r = await runner(cwd, ['issue', 'view', String(number), '--json', 'number,title,body,labels,url,author,comments,updatedAt']);
     const i = r.ok ? parse(r.out) : null;
     if (!i) return { available: false, reason: r.reason || 'Uventet svar fra GitHub' };
     return {

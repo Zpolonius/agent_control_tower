@@ -318,22 +318,67 @@ test('pull requests: læser reviews via gh, og forklarer når gh mangler', async
   const bin = path.join(tmp, 'bin');
   fs.mkdirSync(bin);
   const list = JSON.stringify([{ number: 7, title: 'Ny checkout', headRefName: 'feat/x', reviewDecision: 'CHANGES_REQUESTED', isDraft: false, updatedAt: '2026-11-14T10:00:00Z', url: 'https://github.com/o/r/pull/7', author: { login: 'zac' } }]);
-  const view = JSON.stringify({ number: 7, title: 'Ny checkout', url: 'https://github.com/o/r/pull/7', headRefName: 'feat/x', reviewDecision: 'CHANGES_REQUESTED',
+  const view = JSON.stringify({ number: 7, title: 'Ny checkout', url: 'https://github.com/o/r/pull/7', headRefName: 'feat/x', baseRefName: 'main', reviewDecision: 'CHANGES_REQUESTED',
+    state: 'OPEN', isDraft: false, body: 'Fiks input validering', additions: 42, deletions: 5, changedFiles: 2,
+    statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci/test', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    commits: [{ oid: '1234567890abcdef1234567890abcdef12345678', messageHeadline: 'feat: add check', messageBody: '', author: { login: 'zac' }, authoredDate: '2026-11-14T08:00:00Z' }],
     reviews: [{ author: { login: 'rev' }, state: 'CHANGES_REQUESTED', body: 'Ret <script>alert(1)</script> validering', submittedAt: '2026-11-14T09:00:00Z' }, { author: { login: 'rev' }, state: 'COMMENTED', body: '' }],
     comments: [{ author: { login: 'bot' }, body: 'CI fejlede', createdAt: '2026-11-14T09:30:00Z' }] });
-  const inline = JSON.stringify([{ user: { login: 'rev' }, path: 'src/a.js', line: 12, body: 'Mangler null-tjek', created_at: '2026-11-14T09:01:00Z' }]);
+  const inline = JSON.stringify([{ user: { login: 'rev' }, path: 'src/a.js', line: 12, diff_hunk: '@@ -10,3 +10,4 @@\n+test', body: 'Mangler null-tjek', created_at: '2026-11-14T09:01:00Z' }]);
   fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1 $2" in\n "pr list") echo '${list}';;\n "pr view") echo '${view}';;\n "api "*) echo '${inline}';;\nesac\n`, { mode: 0o755 });
+  if (process.platform === 'win32') {
+    const jsPath = path.join(bin, 'gh-mock.js');
+    fs.writeFileSync(jsPath, `'use strict';
+      const args = process.argv.slice(2);
+      const cmd = args.slice(0, 2).join(' ');
+      if (cmd === 'pr list') process.stdout.write(${JSON.stringify(list)});
+      else if (cmd === 'pr view') process.stdout.write(${JSON.stringify(view)});
+      else if (args[0] === 'api') process.stdout.write(${JSON.stringify(inline)});
+    `);
+    const csPath = path.join(bin, 'gh.cs');
+    const exePath = path.join(bin, 'gh.exe');
+    fs.writeFileSync(csPath, `
+      using System;
+      using System.Diagnostics;
+      class Program {
+        static int Main(string[] args) {
+          var p = Process.Start(new ProcessStartInfo {
+            FileName = "node",
+            Arguments = "\\"${jsPath.replace(/\\/g, '\\\\')}\\" " + string.Join(" ", args),
+            UseShellExecute = false
+          });
+          p.WaitForExit();
+          return p.ExitCode;
+        }
+      }
+    `);
+    const csc = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+    if (fs.existsSync(csc)) execFileSync(csc, ['/nologo', `/out:${exePath}`, csPath]);
+    fs.writeFileSync(path.join(bin, 'gh.cmd'), `@echo off\r\nnode "%~dp0gh-mock.js" %*\r\n`);
+  }
   const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
+  process.env.PATH = `${bin}${path.delimiter}${oldPath}`;
   try {
     const l = (await get('/api/prs?repo=alpha&fresh=1')).json;
     assert.equal(l.available, true);
     assert.equal(l.prs[0].number, 7);
     assert.equal(l.prs[0].decision, 'CHANGES_REQUESTED');
     const d = (await get('/api/prs/detail?repo=alpha&number=7')).json;
+    assert.equal(d.baseBranch, 'main');
+    assert.equal(d.body, 'Fiks input validering');
+    assert.equal(d.state, 'OPEN');
+    assert.equal(d.draft, false);
+    assert.equal(d.additions, 42);
+    assert.equal(d.deletions, 5);
+    assert.equal(d.changedFiles, 2);
+    assert.equal(d.checks.length, 1);
+    assert.equal(d.checks[0].name, 'ci/test');
+    assert.equal(d.commits.length, 1);
+    assert.equal(d.commits[0].author, 'zac');
     assert.equal(d.reviews.length, 1, 'tomme kommentar-reviews sorteres fra');
     assert.equal(d.inline[0].path, 'src/a.js');
     assert.equal(d.inline[0].line, 12);
+    assert.equal(d.inline[0].diffHunk, '@@ -10,3 +10,4 @@\n+test');
     assert.equal(d.comments[0].author, 'bot');
     for (const n of ['7;id', '-1', '0', 'abc', '7 --web', '']) {
       assert.equal((await get(`/api/prs/detail?repo=alpha&number=${encodeURIComponent(n)}`)).status, 400, n);
@@ -453,7 +498,7 @@ test('issues: læser åbne issues via gh, afviser snydenumre og forklarer når g
   fs.writeFileSync(path.join(data, 'view.json'), JSON.stringify({ number: 12, title: 'Eksport til PDF fejler', body: 'Trin:\n1. Åbn <script>alert(1)</script>\n2. Tryk eksport', labels: [{ name: 'bug' }], url: 'https://github.com/o/r/issues/12', author: { login: 'zac' }, updatedAt: '2026-11-14T10:00:00Z', comments: [{ author: { login: 'kollega' }, body: 'Sker også i Safari', createdAt: '2026-11-14T11:00:00Z' }] }));
   fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1 $2" in\n "issue list") cat '${data}/list.json';;\n "issue view") echo "$3" > '${data}/asked'; cat '${data}/view.json';;\nesac\n`, { mode: 0o755 });
   const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
+  process.env.PATH = `${bin}${path.delimiter}${oldPath}`;
   try {
     const l = (await get('/api/issues?repo=alpha&fresh=1')).json;
     assert.equal(l.available, true);
