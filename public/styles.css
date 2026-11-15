@@ -48,8 +48,12 @@ h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; font-fam
 
 .layout { flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 0; }
 .sidebar { border-right: 1px solid var(--line); background: var(--panel); padding: 12px; overflow: auto; }
+.filterbar { display: flex; gap: 6px; align-items: stretch; }
+.filter { flex: 1; min-width: 0; }
 .filter input { width: 100%; background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 8px 10px; }
 .filter input::placeholder { color: var(--muted); }
+.sortbtn { background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 0 9px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.sortbtn:hover { border-color: var(--text); color: var(--text); background: var(--panel2); }
 .navhome, .repo { width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 8px 10px; cursor: pointer; display: block; }
 .navhome { margin: 10px 0 0; font-weight: 600; }
 .navhome + .navhome { margin: 2px 0 0; }
@@ -178,7 +182,7 @@ h3.plain { font: 600 17px var(--sans); text-transform: none; letter-spacing: 0; 
 h2:focus { outline: none; }
 /* Fingre har brug for større trykflader end en mus. */
 @media (pointer: coarse) {
-  .btn, .btn.small, .tab, .navhome, .repo { min-height: 44px; }
+  .btn, .btn.small, .sortbtn, .tab, .navhome, .repo { min-height: 44px; }
   .skillform .radio { min-height: 44px; }
   .panelbar { gap: 14px; }
 }

@@ -4,7 +4,10 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
 const pty = require('node-pty');
-const { createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone } = require('./wait-check');
+const {
+  createWaitChecker, hasApprovalPrompt, inspectQuota, isTaskDone,
+  CHROME_RE, FOOTER_RE, INTERRUPT_RE, BARE_PROMPT_RE, TURN_DONE_RE,
+} = require('./wait-check');
 
 const SCROLLBACK = 300 * 1024;
 const PASTE_MAX = 60000;
@@ -23,6 +26,8 @@ function shellCommand(agentCommand) {
   return agentCommand ? [exe, ['-l', '-i', '-c', agentCommand]] : [exe, ['-l']];
 }
 
+const isNoiseLine = (l) => !l || CHROME_RE.test(l) || FOOTER_RE.test(l) || INTERRUPT_RE.test(l) || BARE_PROMPT_RE.test(l) || TURN_DONE_RE.test(l);
+
 // Finder den seneste læsbare linje fra agenten, uden farvekoder og styretegn, til taleboblen i overblikket.
 // Det er et skøn: programmer der tegner hele skærmen om (som Claude Code) kan give en bundlinje i stedet for en besked.
 function lastLine(buffer, errorsFirst) {
@@ -31,11 +36,17 @@ function lastLine(buffer, errorsFirst) {
   if (buffer.length > 6000) tail = tail.slice(Math.max(0, tail.search(/[\r\n]/)));
   const text = tail
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[mhl]/g, '')
+    .replace(/\x1b\[\d*C/g, ' ')
     .replace(/\x1b\[[0-9;?<=>]*[ -/]*[@-~]/g, '\n')
     .replace(/\x1b[@-_]/g, '')
     .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
-  const lines = text.split(/[\r\n]+/).map((l) => l.replace(/^[\s>❯$#│|]+/, '').trim())
-    .filter((l) => l !== 'logout' && (l.match(/\p{L}/gu) || []).length >= 3); // 'logout' er skallens egen afskedshilsen
+  const lines = text
+    .split(/[\r\n]+/)
+    .map((l) => l.replace(/^[│┃|]+\s*|\s*[│┃|]+$/g, '').trim())
+    .filter((l) => !isNoiseLine(l))
+    .map((l) => l.replace(/^[\s●⏺•>❯›$#│┃|]+/, '').replace(/\s*[│┃|]+$/, '').trim())
+    .filter((l) => !isNoiseLine(l) && l !== 'logout' && (l.match(/\p{L}/gu) || []).length >= 3); // 'logout' er skallens egen afskedshilsen
   const short = (l) => (l.length > 140 ? `${l.slice(0, 139)}…` : l);
   // Stoppede agenten med en fejl, er selve fejlbeskeden mere nyttig end den allersidste linje.
   if (errorsFirst) {

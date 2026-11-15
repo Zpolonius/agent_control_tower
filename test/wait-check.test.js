@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
 const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
-const { createSessions } = require('../server/sessions');
+const { createSessions, lastLine } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
   const procs = [
@@ -693,4 +693,74 @@ test('API /api/state: returnerer status kvote når agent rammer Individual quota
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('lastLine: filtrerer TUI-rammer, footers, prompts og tur-tidsstempler for Claude Code, Gemini og Codex', () => {
+  // Claude Code afsluttet tur med PR-link, tur-tidsstempel, rammer, tom prompt og auto-mode footer
+  const claudePrDone = [
+    '● PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71',
+    '✻ Churned for 25s · done 4:33 PM',
+    '──────────────────────────',
+    '❯ ',
+    '──────────────────────────',
+    '  ▸▸ auto mode on (shift+tab to cycle) · PR #71',
+  ].join('\r\n');
+  assert.equal(lastLine(claudePrDone), 'PR\'en er oprettet: https://github.com/Zpolonius/Skafferiet/pull/71');
+
+  // Claude Code spørgsmål med Sautéed/Brewed tidsstempel, accept edits footer og shortcuts
+  const claudeQuestion = [
+    '⏺ Jeg har opdateret testen.',
+    '● Skal jeg pushe?',
+    '✻ Sautéed for 45s · done 4:19 PM',
+    '* Brewed for 1m 23s',
+    '──────────────────────────',
+    '❯ ',
+    '⏵⏵ accept edits on (shift+tab to cycle) · 42% context left',
+    '? for shortcuts',
+  ].join('\r\n');
+  assert.equal(lastLine(claudeQuestion), 'Skal jeg pushe?');
+
+  // Gemini / Antigravity TUI med boks-kanter, ConPTY \x1b[1C, placeholder-prompt og interrupt-linje
+  const geminiBoxed = [
+    '╭────────────────────────────────────────╮',
+    '│ ● Skal\x1b[1Cjeg\x1b[1Ckøre\x1b[1Cflutter\x1b[1Ctest\x1b[1Cnu?       │',
+    '╰────────────────────────────────────────╯',
+    '╭────────────────────────────────────────╮',
+    '│ > Type your message or @path/to/file   │',
+    '╰────────────────────────────────────────╯',
+    'ctrl+c to interrupt · ctrl+b to run in background',
+  ].join('\r\n');
+  assert.equal(lastLine(geminiBoxed), 'Skal jeg køre flutter test nu?');
+
+  // OpenAI Codex TUI med bullet (•), placeholder-prompt og esc to interrupt
+  const codexDone = [
+    '• Alle 14 tests i wait-check.test.js består.',
+    '╭────────────────────────────────────────╮',
+    '│ › Ask Codex to do anything             │',
+    '╰────────────────────────────────────────╯',
+    'shift+tab to cycle · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(lastLine(codexDone), 'Alle 14 tests i wait-check.test.js består.');
+
+  // Aktive spinner-linjer bevares fortsat, når de er den seneste meningsfulde linje
+  const activeSpinner = [
+    '● Starter testkørsel',
+    '⠋ Arbejder… 3\r⠙ Arbejder… 4',
+    '──────────────────────────',
+    '❯ ',
+    '? for shortcuts · esc to interrupt',
+  ].join('\r\n');
+  assert.equal(lastLine(activeSpinner), '⠙ Arbejder… 4');
+
+  // Eksisterende garantier fra app.test.js samt errorsFirst med TUI-bundlinjer
+  assert.equal(lastLine('\x1b[32mRetter pdf.ts\x1b[0m\r\n\x1b[2K> '), 'Retter pdf.ts');
+  assert.equal(lastLine('Skal jeg pushe?\r\n╭────────╮\r\n│ > \x1b[7m \x1b[0m │\r\n╰────────╯'), 'Skal jeg pushe?');
+  const failedWithFooter = [
+    '● Fatal error: migrations failed',
+    'Efterfølgende oprydning færdig',
+    '✻ Churned for 5s · done 4:35 PM',
+    '❯ ',
+    '? for shortcuts',
+  ].join('\r\n');
+  assert.equal(lastLine(failedWithFooter, true), 'Fatal error: migrations failed');
 });

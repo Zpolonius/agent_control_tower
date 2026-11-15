@@ -248,6 +248,62 @@
     toastTimer = setTimeout(() => { t.className = 'toast'; }, 6000);
   }
 
+  const VALID_PAGES = new Set(['home', 'skills', 'tokens']);
+  const VALID_VIEWS = new Set(['overview', 'brain', 'issues', 'prs', 'skills']);
+  let lastHash = null;
+
+  function buildHash() {
+    if (!state.repo) {
+      if (state.page === 'skills' || state.page === 'tokens') return `#page=${state.page}`;
+      return '';
+    }
+    const p = new URLSearchParams();
+    p.set('repo', state.repo);
+    if (state.view && state.view !== 'overview') p.set('view', state.view);
+    if (state.view === 'issues' && state.issue[state.repo] != null) p.set('issue', String(state.issue[state.repo]));
+    else if (state.view === 'prs' && state.pr[state.repo] != null) p.set('pr', String(state.pr[state.repo]));
+    else if (state.view === 'brain' && state.brainFile[state.repo]) p.set('brainFile', state.brainFile[state.repo]);
+    return `#${p.toString()}`;
+  }
+
+  function syncUrl(replace) {
+    if (/token=[a-f0-9]{64}/.test(location.hash)) return;
+    const hash = buildHash();
+    lastHash = hash;
+    if (location.hash === hash || (!location.hash && !hash)) return;
+    const url = `${location.pathname}${location.search}${hash}`;
+    if (replace) history.replaceState(null, '', url);
+    else history.pushState(null, '', url);
+  }
+
+  function readRoute() {
+    const raw = location.hash.replace(/^#/, '');
+    const p = new URLSearchParams(raw);
+    p.delete('token');
+    const repo = p.get('repo');
+    if (repo) {
+      state.repo = repo;
+      state.page = 'home';
+      const v = p.get('view') || 'overview';
+      state.view = (VALID_VIEWS.has(v) || /^term:[a-f0-9]+$/.test(v)) ? v : 'overview';
+      const issueNum = Number(p.get('issue'));
+      if (Number.isInteger(issueNum) && issueNum > 0) state.issue[repo] = issueNum;
+      else delete state.issue[repo];
+      const prNum = Number(p.get('pr'));
+      if (Number.isInteger(prNum) && prNum > 0) state.pr[repo] = prNum;
+      else delete state.pr[repo];
+      const bf = p.get('brainFile') || p.get('file');
+      if (bf) state.brainFile[repo] = bf;
+      else delete state.brainFile[repo];
+    } else {
+      state.repo = null;
+      const page = p.get('page');
+      state.page = VALID_PAGES.has(page) ? page : 'home';
+      state.view = 'overview';
+    }
+    lastHash = location.hash;
+  }
+
   // Nøglen kommer med linket fra terminalen (efter #, som aldrig sendes til en server). Den gemmes i browseren under
   // netop denne adresse og port, hvor andre lokale sider ikke kan læse den, og fjernes straks fra adresselinjen.
   let token = null;
@@ -256,15 +312,30 @@
     if (m) {
       token = m[1];
       try { localStorage.setItem('ct-token', token); } catch { /* privat tilstand: nøglen huskes kun til siden lukkes */ }
-      history.replaceState(null, '', location.pathname);
+      const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (p.has('repo') || p.has('page')) readRoute();
+      const hash = buildHash();
+      history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+      lastHash = hash;
       return true;
     }
     if (!token) { try { token = localStorage.getItem('ct-token'); } catch { token = null; } }
     return false;
   }
-  readToken();
+  if (!readToken()) readRoute();
+
   // Indsætter du et nyt link i den samme fane (fx efter en genstart), læses den nye nøgle uden at siden skal genindlæses.
-  window.addEventListener('hashchange', () => { if (readToken()) { state.sig = null; refresh(true).then(renderMain); } });
+  // Ellers opdateres visningen, når du bruger frem/tilbage i browseren eller ændrer adressen.
+  function onRouteChange() {
+    if (readToken()) { state.sig = null; refresh(true).then(renderMain); return; }
+    if (location.hash === lastHash) return;
+    readRoute();
+    $('toast').className = 'toast';
+    renderChrome();
+    renderMain();
+  }
+  window.addEventListener('hashchange', onRouteChange);
+  window.addEventListener('popstate', onRouteChange);
 
   async function api(path, opts) {
     let res;
@@ -525,10 +596,49 @@
   const sessionsFor = (repo) => (state.data ? state.data.sessions.filter((s) => s.repo === repo) : []);
   const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && s.exitCode == null);
 
+  try { state.repoSort = localStorage.getItem('ct-repo-sort') === 'alpha' ? 'alpha' : 'active'; } catch { state.repoSort = 'active'; }
+
+  function repoSessionWeight(repoName) {
+    let best = 99;
+    for (const s of sessionsFor(repoName)) {
+      if (s.status === 'afsluttet') continue;
+      const w = ORDER[s.status] ?? 6;
+      if (w < best) best = w;
+    }
+    return best;
+  }
+
+  function sortRepos(list) {
+    if (state.repoSort === 'alpha') {
+      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'da'));
+    }
+    return [...list].sort((a, b) => {
+      const sw = repoSessionWeight(a.name) - repoSessionWeight(b.name);
+      if (sw !== 0) return sw;
+      const aDirty = (a.changed + a.untracked) > 0 ? 1 : 0;
+      const bDirty = (b.changed + b.untracked) > 0 ? 1 : 0;
+      if (bDirty !== aDirty) return bDirty - aDirty;
+      const aTime = (a.lastCommit && a.lastCommit.time) || 0;
+      const bTime = (b.lastCommit && b.lastCommit.time) || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return a.name.localeCompare(b.name, 'da');
+    });
+  }
+
+  function renderSortBtn() {
+    const btn = $('reposort');
+    if (!btn) return;
+    const isAlpha = state.repoSort === 'alpha';
+    btn.textContent = isAlpha ? 'A–Å' : 'Aktivitet';
+    btn.title = isAlpha ? 'Sorteret A–Å – klik for aktivitet' : 'Sorteret efter aktivitet – klik for A–Å';
+    btn.setAttribute('aria-label', isAlpha ? 'Sortering af repos: A–Å' : 'Sortering af repos: Aktivitet');
+  }
+
   // ---------- topbar + sidebar ----------
   function renderChrome() {
     const d = state.data;
     document.body.classList.toggle('offline', state.offline);
+    renderSortBtn();
     if (!d) {
       $('root').textContent = state.locked ? 'Låst' : state.offline ? 'Ingen forbindelse' : 'Indlæser…';
       $('summary').replaceChildren(); $('repolist').replaceChildren(); $('skipped').textContent = '';
@@ -558,7 +668,7 @@
       }, h('strong', { 'data-totaltok': '1', text: fmtTok(totalTok.total) }), ' tokens')) : null,
     ].filter(Boolean));
     const f = state.filter.trim().toLowerCase();
-    const repos = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
+    const repos = sortRepos(d.repos.filter((r) => !f || r.name.toLowerCase().includes(f)));
     const cur = (el, on) => { if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); };
     cur($('home'), !state.repo && state.page === 'home');
     cur($('skillsnav'), !state.repo && state.page === 'skills');
@@ -584,6 +694,7 @@
     state.repo = repo;
     state.page = page || 'home';
     state.view = view || 'overview';
+    syncUrl(false);
     $('toast').className = 'toast';
     renderChrome();
     renderMain();
@@ -609,11 +720,16 @@
     if (!state.repo && state.page === 'tokens') { main.replaceChildren(h('h2', { text: 'Token-regnskab' }), h('section', { id: 'panel', class: 'panel' })); tokensPanel($('panel')); return; }
     if (!state.repo) { main.replaceChildren(dashboard()); return; }
     const repo = state.data.repos.find((r) => r.name === state.repo);
+    if (state.view.startsWith('term:') && !sessionsFor(state.repo).some((s) => s.id === state.view.slice(5))) {
+      state.view = 'overview';
+      syncUrl(true);
+    }
     // Mappen kan være slettet eller omdøbt, mens en agent stadig kører i den. Så vises kun dens sessioner.
     if (!repo && !state.view.startsWith('term:')) {
       const first = sessionsFor(state.repo)[0];
-      if (!first) { state.repo = null; main.replaceChildren(dashboard()); return; }
+      if (!first) { state.repo = null; state.view = 'overview'; syncUrl(true); renderChrome(); main.replaceChildren(dashboard()); return; }
       state.view = `term:${first.id}`;
+      syncUrl(true);
     }
     const head = h('header', { class: 'repohead' },
       h('div', {},
@@ -633,6 +749,7 @@
   function renderTabs() {
     const tabs = $('tabs');
     if (!tabs) return;
+    syncUrl(true);
     const exists = state.data.repos.some((r) => r.name === state.repo);
     const list = exists ? [['overview', 'Overblik'], ['brain', 'Hjerne'], ['issues', 'Issues'], ['prs', 'Pull requests'], ['skills', 'Skills']] : [];
     const nodes = list.map(([id, label]) => tabButton(id, label));
@@ -646,7 +763,7 @@
   function tabButton(id, label, extra) {
     return h('button', {
       type: 'button', class: 'tab', 'data-key': `tab:${id}`, 'aria-current': state.view === id ? 'page' : null,
-      onclick: () => { state.view = id; renderTabs(); renderPanel(); refocus(`tab:${id}`); },
+      onclick: () => { state.view = id; syncUrl(false); renderTabs(); renderPanel(); refocus(`tab:${id}`); },
     }, label, extra);
   }
   const branchText = (r) => (r.detached ? `intet branch – står på commit ${r.oid || '?'}` : r.branch || 'ingen branch');
@@ -776,7 +893,7 @@
     if (!d.repos.length) wrap.append(h('p', { class: 'empty', text: `Der blev ikke fundet git-repos i ${d.root}.` }));
     const first = d.agents[0];
     const f = state.filter.trim().toLowerCase();
-    const shown = d.repos.filter((r) => !f || r.name.toLowerCase().includes(f));
+    const shown = sortRepos(d.repos.filter((r) => !f || r.name.toLowerCase().includes(f)));
     if (d.repos.length && !shown.length) wrap.append(h('p', { class: 'empty', text: 'Ingen repos matcher filteret.' }));
     wrap.append(h('ul', { class: 'cards' }, shown.map((r) => {
       const n = r.changed + r.untracked;
@@ -849,8 +966,9 @@
     }
     const view = h('article', { class: 'brainview', tabindex: '-1' });
     const nav = h('ul', { class: 'brainfiles', 'aria-label': 'Filer i hjernen' });
-    const open = async (path) => {
+    const open = async (path, push) => {
       state.brainFile[repo] = path;
+      if (state.repo === repo && state.view === 'brain') syncUrl(!push);
       for (const b of nav.querySelectorAll('button')) { if (b.dataset.path === path) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); }
       view.replaceChildren(h('p', { class: 'empty', text: 'Åbner…' }));
       try {
@@ -863,7 +981,7 @@
       } catch (err) { view.replaceChildren(h('p', { class: 'alert', role: 'alert', text: err.message })); }
     };
     for (const f of files) {
-      nav.append(h('li', {}, h('button', { type: 'button', 'data-path': f.path, onclick: () => open(f.path) },
+      nav.append(h('li', {}, h('button', { type: 'button', 'data-path': f.path, onclick: () => open(f.path, true) },
         h('span', { text: f.path }), h('small', { text: ago(f.mtime) }))));
     }
     panel.className = 'panel brain';
@@ -871,7 +989,7 @@
     const wanted = state.brainFile[repo];
     // Start med den vigtigste fil: CLAUDE.md, så AGENTS.md, så docs – ikke bare den første i alfabetet.
     const best = files.find((f) => f.path === 'CLAUDE.md') || files.find((f) => f.path === 'AGENTS.md') || files.find((f) => /^docs\//i.test(f.path)) || files[0];
-    open(files.some((f) => f.path === wanted) ? wanted : best.path);
+    open(files.some((f) => f.path === wanted) ? wanted : best.path, false);
   }
 
   // ---------- skills ----------
@@ -1077,7 +1195,7 @@
     if (!data.available) { panel.replaceChildren(bar, h('p', { class: 'alert', role: 'alert', text: data.reason })); return; }
     if (!data.issues.length) { panel.replaceChildren(bar, h('p', { class: 'empty', text: 'Ingen åbne issues i dette repo.' })); return; }
     panel.replaceChildren(bar, h('ul', { class: 'prlist' }, data.issues.map((i) => h('li', {},
-      h('button', { type: 'button', class: 'prrow', onclick: () => { state.issue[repo] = i.number; issuesPanel(panel); } },
+      h('button', { type: 'button', class: 'prrow', onclick: () => { state.issue[repo] = i.number; syncUrl(false); issuesPanel(panel); } },
         h('span', { class: 'prnum', text: `#${i.number}` }),
         h('span', { class: 'prtitle' }, i.title, h('small', { text: `@${i.author} · ${ago(Date.parse(i.updatedAt))}${i.comments ? ` · ${i.comments} kommentar${i.comments === 1 ? '' : 'er'}` : ''}${i.assignees.length ? ` · tildelt ${i.assignees.map((a) => `@${a}`).join(', ')}` : ''}` })),
         i.labels.map((l) => chip(l)))))));
@@ -1085,7 +1203,7 @@
 
   async function issueDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'issues' && state.issue[repo] === number;
-    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.issue[repo]; issuesPanel(panel); } }, '← Alle issues');
+    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.issue[repo]; syncUrl(false); issuesPanel(panel); } }, '← Alle issues');
     let issue, skills;
     try {
       [issue, skills] = await Promise.all([
@@ -1152,7 +1270,7 @@
     if (!data.prs.length) { panel.replaceChildren(bar, h('p', { class: 'empty', text: 'Ingen åbne pull requests i dette repo.' })); return; }
     panel.replaceChildren(bar, h('ul', { class: 'prlist' }, data.prs.map((p) => {
       const dec = DECISION[p.decision];
-      return h('li', {}, h('button', { type: 'button', class: 'prrow', onclick: () => { state.pr[repo] = p.number; prPanel(panel); } },
+      return h('li', {}, h('button', { type: 'button', class: 'prrow', onclick: () => { state.pr[repo] = p.number; syncUrl(false); prPanel(panel); } },
         h('span', { class: 'prnum', text: `#${p.number}` }),
         h('span', { class: 'prtitle' }, p.title, h('small', {}, h('span', { class: 'branch', text: p.branch }), ` · @${p.author} · ${ago(Date.parse(p.updatedAt))}`)),
         p.draft ? chip('Kladde', 'muted') : null,
@@ -1177,6 +1295,7 @@
       state.sig = null;
       await refresh();
       state.view = `term:${target.id}`;
+      syncUrl(false);
       renderTabs(); renderPanel();
       toast(done || 'Teksten er indsat hos agenten. Læs den igennem, og tryk Enter for at sende.');
       return true;
@@ -1184,6 +1303,7 @@
       // Ligger der allerede en usendt tekst, ville den nye blive klistret bagpå – vis terminalen i stedet.
       if (err.data && err.data.pending) {
         state.view = `term:${target.id}`;
+        syncUrl(false);
         renderTabs(); renderPanel();
         toast('Der ligger allerede en usendt tekst hos agenten. Send den med Enter, eller slet den (Ctrl+U), og prøv igen.', true);
       } else toast(err.message, true);
@@ -1193,7 +1313,7 @@
 
   async function prDetail(panel, repo, number) {
     const still = () => state.repo === repo && state.view === 'prs' && state.pr[repo] === number;
-    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.pr[repo]; prPanel(panel); } }, '← Alle pull requests');
+    const back = h('button', { type: 'button', class: 'btn small', onclick: () => { delete state.pr[repo]; syncUrl(false); prPanel(panel); } }, '← Alle pull requests');
     let pr;
     try { pr = await api(`/api/prs/detail?repo=${encodeURIComponent(repo)}&number=${number}`); } catch (err) {
       if (still()) panel.replaceChildren(back, h('p', { class: 'alert', role: 'alert', text: err.message }));
@@ -1553,6 +1673,13 @@
 
   // ---------- start ----------
   $('filter').addEventListener('input', (e) => { state.filter = e.target.value; renderChrome(); if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard()); });
+  $('reposort').addEventListener('click', () => {
+    state.repoSort = state.repoSort === 'alpha' ? 'active' : 'alpha';
+    try { localStorage.setItem('ct-repo-sort', state.repoSort); } catch { /* privat tilstand */ }
+    renderChrome();
+    if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard());
+  });
+  renderSortBtn();
   $('notifybtn').addEventListener('click', async () => {
     if (!canNotify()) { toast('Din browser kan ikke vise beskeder. Fanens titel og lyden virker stadig.', true); return; }
     const on = prefs.notify && Notification.permission === 'granted';
@@ -1573,5 +1700,5 @@
   const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
   setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-  refresh().then(renderMain);
+  refresh().then(() => { if (!$('tabs') && !$('dash') && !$('panel')) renderMain(); });
 })();
