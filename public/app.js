@@ -19,7 +19,7 @@
 
   const state = {
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
-    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, notifiedApproval: new Map(), prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
   };
 
   const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
@@ -151,6 +151,8 @@
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
     if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
+    // Et spørgsmål om godkendelse er det vigtigste at vise – ikke en tilfældig linje fra menuen.
+    if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
@@ -631,10 +633,10 @@
     const text = kind === 'kvote' && s.waitingDetail
       ? `${s.name} i ${s.repo}: ${s.waitingDetail}`
       : fill(pickRandom(FUN[msgKey]), s);
-    ding(kind);
-    // Ser du allerede på netop den agent, er en besked bare støj.
+    // Ser du allerede på netop den agent, er både lyd og besked bare støj.
     const watching = !document.hidden && state.repo === s.repo && state.view === `term:${s.id}`;
     if (watching) return;
+    ding(kind);
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
         const title = kind === 'fejlet' ? 'En agent er gået ned'
@@ -663,11 +665,18 @@
       // med det samme, skal det også give en besked.
       const becameApproval = s.status === 'venter' && !!s.needsApproval && !prevApproval[s.id];
       if (!prev || (prev[s.id] === s.status && !becameApproval)) continue;
+      // Samme spørgsmål giver kun én besked, også hvis status kortvarigt har skiftet imellem.
+      if (s.needsApproval && s.approvalSince) {
+        if (state.notifiedApproval.get(s.id) === s.approvalSince) continue;
+        state.notifiedApproval.set(s.id, s.approvalSince);
+      }
+      // En agent du lige har startet, og som står klar uden at have fået noget at lave, er ikke værd at forstyrre for.
+      if (s.status === 'venter' && s.fresh && !s.needsApproval && !s.pendingPaste) continue;
       if (s.status === 'venter') notify(s, 'venter');
       else if (s.status === 'kvote') notify(s, 'kvote');
       else if (s.status === 'faerdig' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'faerdig');
       else if (s.status === 'fejlet') notify(s, 'fejlet');
-      else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id) && prev[s.id] !== 'faerdig') notify(s, 'afsluttet');
+      else if (s.status === 'afsluttet' && !s.stopped && !state.stoppedByMe.has(s.id) && prev[s.id] !== 'faerdig') notify(s, 'afsluttet');
     }
     state.prevStatus = next;
     state.prevApproval = nextApproval;

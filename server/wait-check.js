@@ -285,8 +285,8 @@ function collapseStatusRedraws(lines) {
   return out;
 }
 
-function splitTurnLines(buffer) {
-  const lines = cleanLines(buffer).slice(-20);
+function splitTurnLines(buffer, limit = 20) {
+  const lines = cleanLines(buffer).slice(-limit);
   if (!lines.length) return { lines: [], turnStart: 0, sawTurnDone: false, turnLines: [] };
   let turnStart = 0;
   let sawTurnDone = false;
@@ -316,10 +316,19 @@ function hasApprovalPrompt(buffer) {
   return findActivePromptIndex(turnLines) !== -1;
 }
 
-function findActiveQuotaIndex(turnLines) {
-  const minIdx = Math.max(0, turnLines.length - 11);
+// strict: kvote-beskeden skal stå i starten af linjen og ikke i anførselstegn – så "jeg håndterede 'rate limit exceeded'" ikke tæller.
+function quotaLine(l, strict) {
+  const m = l.match(QUOTA_RE);
+  if (!m) return false;
+  if (!strict) return true;
+  const before = l.slice(0, m.index).replace(/^[\s●⏺•*⎿✻✶✳✢⚠!>❯›-]+/, '').replace(/^(?:api\s+)?(?:error|fejl|warning|advarsel)\s*:?\s*/i, '');
+  return before.length <= 30 && !/["'“”‘’`]\s*$/.test(before);
+}
+
+function findActiveQuotaIndex(turnLines, window = 11, strict = false) {
+  const minIdx = Math.max(0, turnLines.length - window);
   for (let i = turnLines.length - 1; i >= minIdx; i -= 1) {
-    if (!QUOTA_RE.test(turnLines[i])) continue;
+    if (!quotaLine(turnLines[i], strict)) continue;
     const after = turnLines.slice(i + 1);
     const superseded = after.some((l) => (isSpinnerLine(l) && !BG_SPINNER_RE.test(l)) || COMPLETION_RE.test(l));
     return superseded ? -1 : i;
@@ -327,9 +336,11 @@ function findActiveQuotaIndex(turnLines) {
   return -1;
 }
 
-function inspectQuota(buffer) {
-  const { turnLines } = splitTurnLines(buffer);
-  const idx = findActiveQuotaIndex(turnLines);
+// window: hvor tæt på bunden kvote-beskeden skal stå. På den gengivne skærm skal den være blandt de sidste linjer,
+// så en agent der bare nævner "rate limit exceeded" midt i et svar, ikke tæller.
+function inspectQuota(buffer, { limit = 20, window = 11, strict = false } = {}) {
+  const { turnLines } = splitTurnLines(buffer, limit);
+  const idx = findActiveQuotaIndex(turnLines, window, strict);
   if (idx === -1) return null;
   const line = turnLines[idx];
   const windowLines = turnLines
@@ -405,18 +416,25 @@ function inspectBuffer(buffer) {
 }
 
 // Afgør om en stille agent uden kørende baggrundsopgaver er helt færdig med opgaven (i stedet for at vente på svar/godkendelse).
-function isTaskDone(buffer, { hadInput = false } = {}) {
-  const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer);
+// ignorePrompts: et spørgsmål på skærmen, som du allerede har svaret på, tæller ikke (fx aider, der lader det stå).
+// strict (skærm-tilstand): kun tydelige spørgsmål tæller – ikke ord som "Create new file" i agentens svar.
+function isTaskDone(buffer, { hadInput = false, ignorePrompts = false, limit = 20, strict = false, mine = [] } = {}) {
+  const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer, limit);
   if (!lines.length) return false;
+  const isMine = mineFilter(mine);
+  const promptIn = (ls) => !ignorePrompts && (strict ? ls.some((_, i) => strongPromptAt(ls, i, isMine)) : hasExplicitUserPrompt(ls));
 
-  if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) return false;
+  if ((!ignorePrompts && (strict ? promptIn(turnLines) : findActivePromptIndex(turnLines) !== -1)) || findActiveQuotaIndex(turnLines, 11, strict) !== -1) return false;
   if (turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l))) return false;
   if (turnLines.slice(-6).some(isSpinnerLine)) return false;
 
   if (sawTurnDone) {
+    // På skærmen står linjen "Worked for …" fra den forrige tur stadig, når en ny tur er i gang. Kommer der nyt fra agenten
+    // under den (●/⏺/⎿/•-linjer, spinner eller "esc to interrupt"), er det ikke den aktuelle tur, der er færdig.
+    if (strict && turnLines.some((l) => !isMine(l) && (/^[●⏺⎿•✻✶✳✢]/.test(l) || isSpinnerLine(l) || INTERRUPT_RE.test(l)))) return false;
     const beforeDone = lines.slice(Math.max(0, turnStart - 6), turnStart - 1);
-    if (hasExplicitUserPrompt(turnLines) || turnLines.slice(-4).some(looksLikeQuestion)) return false;
-    if (hasExplicitUserPrompt(beforeDone) || beforeDone.slice(-2).some(looksLikeQuestion)) return false;
+    if (promptIn(turnLines) || turnLines.slice(-4).some(looksLikeQuestion)) return false;
+    if (promptIn(beforeDone) || (!ignorePrompts && beforeDone.slice(-2).some(looksLikeQuestion))) return false;
     if (beforeDone.slice(-2).some((l) => INTERRUPTED_RE.test(l))) return false;
     return true;
   }
@@ -427,12 +445,55 @@ function isTaskDone(buffer, { hadInput = false } = {}) {
   }
   if (promptIdx < 1 || lines.length - 1 - promptIdx > 3) return false;
   const recentBeforePrompt = lines.slice(Math.max(0, promptIdx - 6), promptIdx);
-  if (hasExplicitUserPrompt(recentBeforePrompt) || recentBeforePrompt.slice(-2).some(looksLikeQuestion)) return false;
+  if (promptIn(recentBeforePrompt) || (!ignorePrompts && recentBeforePrompt.slice(-2).some(looksLikeQuestion))) return false;
   if (recentBeforePrompt.slice(-2).some((l) => INTERRUPTED_RE.test(l))) return false;
   return hadInput || recentBeforePrompt.some((l) => COMPLETION_RE.test(l));
 }
 
+// Finder et spørgsmål om godkendelse på den gengivne skærm (ikke i tekststrømmen).
+// Kræver et tydeligt spørgsmål: en ja/nej-markering, en valgmenu, eller et spørgsmål fulgt af valgmuligheder lige under.
+// Et enkelt ord som "proceed?" eller "Create new file" midt i agentens svar er ikke nok.
+// draft: det du selv er ved at skrive i feltet – "> ja" er dit svar, ikke agentens spørgsmål.
+// Returnerer { line, count } – count er hvor mange gange netop den linje står på skærmen (bruges til at se et nyt spørgsmål).
+const OPTION_RE = /^(?:[❯›>▸►●•*]\s*)?(?:\d[.)]|\[\d\])\s+\S|\besc\b.{0,20}\b(?:cancel|reject|deny|dismiss|decline)\b|^(?:[❯›>▸►●•*]\s*)?(?:yes|no|allow|deny|always allow|approve|reject)\b/i;
+// mine: tekster du selv har skrevet eller sendt. "> ja" eller "> approve" i feltet er dig, ikke agentens spørgsmål.
+function mineFilter(mine) {
+  const set = new Set((mine || []).map((x) => String(x).trim()).filter(Boolean));
+  return (l) => set.size > 0 && /^[>❯›]\s*/.test(l) && set.has(l.replace(/^[>❯›]\s*/, '').trim());
+}
+
+// Står der et tydeligt spørgsmål på linje i? (se findApprovalOnScreen). Returnerer spørgsmålets kendetegn eller null.
+function strongPromptAt(lines, i, isMine) {
+  const l = lines[i];
+  if (isMine(l)) return null;
+  if (YES_NO_RE.test(l) || USER_WAIT_RE.test(l)) return l;
+  if (CHOICE_RE.test(l)) {
+    // Find spørgsmålet over menuen, så spørgsmålet (ikke den valgte linje) bliver dets kendetegn.
+    return lines.slice(Math.max(0, i - 8), i).reverse().find((x) => USER_PROMPT_RE.test(x) || looksLikeQuestion(x)) || l;
+  }
+  if (USER_PROMPT_RE.test(l) && lines.slice(i + 1, i + 9).some((x) => !isMine(x) && (CHOICE_RE.test(x) || YES_NO_RE.test(x) || OPTION_RE.test(x)))) return l;
+  return null;
+}
+
+function findApprovalOnScreen(text, { mine = [], limit = 80 } = {}) {
+  const { turnLines } = splitTurnLines(text, limit);
+  const isMine = mineFilter(mine);
+  for (let i = turnLines.length - 1; i >= 0; i -= 1) {
+    const anchor = strongPromptAt(turnLines, i, isMine);
+    if (anchor) return { line: anchor, count: turnLines.filter((x) => x === anchor).length };
+  }
+  return null;
+}
+
+const SCREEN_QUOTA = { limit: 80, window: 6, strict: true };
+
 function createWaitChecker({ query = queryProcesses } = {}) {
+  // Sessioner med en gengivet skærm giver deres skærmtekst og egen afgørelse om godkendelse; ellers bruges tekststrømmen.
+  const textOf = (s) => (typeof s.screenText === 'function' ? s.screenText() : s.buffer);
+  const blocked = (s) => (typeof s.screenText === 'function'
+    ? !!s.approvalOpen || !!inspectQuota(textOf(s), SCREEN_QUOTA)
+    : hasApprovalPrompt(s.buffer) || !!inspectQuota(s.buffer));
+
   let cached = null;
   let cachedAt = 0;
   let inflight = null;
@@ -457,19 +518,19 @@ function createWaitChecker({ query = queryProcesses } = {}) {
     if (!idleSessions.length) return;
     const procs = await snapshot();
     for (const s of idleSessions) {
-      if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) {
+      if (blocked(s)) {
         s.waitState = null;
         continue;
       }
       const pid = s.proc && s.proc.pid;
       const fromProc = procs && pid ? inspectProcessTree(pid, procs) : null;
-      s.waitState = fromProc || inspectBuffer(s.buffer);
+      s.waitState = fromProc || inspectBuffer(textOf(s));
     }
   }
 
   function checkSync(s) {
-    if (hasApprovalPrompt(s.buffer) || inspectQuota(s.buffer)) return null;
-    return s.waitState || inspectBuffer(s.buffer);
+    if (blocked(s)) return null;
+    return s.waitState || inspectBuffer(textOf(s));
   }
 
   return { checkAll, checkSync };
@@ -480,6 +541,8 @@ module.exports = {
   inspectProcessTree,
   inspectBuffer,
   hasApprovalPrompt,
+  findApprovalOnScreen,
+  SCREEN_QUOTA,
   inspectQuota,
   isTaskDone,
   sanitizeDetail,
