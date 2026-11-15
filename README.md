@@ -67,11 +67,12 @@ Knapperne "Beskeder" og "Lyd" øverst er slået fra, indtil du selv slår dem ti
 | Status | Betyder |
 |---|---|
 | Arbejder | Agenten skriver til terminalen lige nu |
-| Venter på dig | Ingen aktivitet i `idleSeconds` sekunder – den venter sandsynligvis på svar |
+| Venter på xxxx | Ingen ny tekst i `idleSeconds` sekunder, men der kører subagenter, tests, emulator, build m.m. |
+| Venter på dig | Ingen aktivitet i `idleSeconds` sekunder og ingen aktive underopgaver – den venter sandsynligvis på svar |
 | Åben | En almindelig terminal |
 | Afsluttet / Fejlet | Sessionen er slut (fejlet = sluttede med en fejlkode) |
 
-"Venter på dig" er et skøn ud fra aktivitet, ikke et signal fra agenten selv.
+"Venter på dig" og "Venter på xxxx" er et skøn ud fra aktivitet, underprocesser og terminalens seneste linjer.
 
 ## Sikkerhed
 
