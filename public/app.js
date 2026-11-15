@@ -18,8 +18,13 @@
   }
 
   const state = {
+<<<<<<< HEAD
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
     brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+=======
+    data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false,
+    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+>>>>>>> 8b295960b6006d9e7ca47bbcd8eb2129ee4cad6d
   };
 
   const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
@@ -49,6 +54,7 @@
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
     afventer: { label: 'Venter på andet', cls: 'extwait', glyph: '◷' },
     venter: { label: 'Venter på dig', cls: 'wait', glyph: '◐' },
+    faerdig: { label: 'Færdig', cls: 'ready', glyph: '✓' },
     aaben: { label: 'Åben', cls: 'open', glyph: '▪' },
     afsluttet: { label: 'Afsluttet', cls: 'done', glyph: '✓' },
     fejlet: { label: 'Fejlet', cls: 'fail', glyph: '✕' },
@@ -58,13 +64,14 @@
     REVIEW_REQUIRED: ['Afventer review', 'wait'], COMMENTED: ['Kommenteret', 'open'], DISMISSED: ['Afvist', 'done'],
   };
 
-  function badge(status, waitingFor, waitingDetail) {
+  function badge(status, waitingFor, waitingDetail, needsApproval) {
     const s = STATUS[status] || STATUS.afsluttet;
-    const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}` : s.label;
+    const label = status === 'afventer' && waitingFor ? `Venter på ${waitingFor}`
+      : status === 'venter' && needsApproval ? 'Mangler godkendelse' : s.label;
     return h('span', { class: `badge ${s.cls}`, title: status === 'afventer' && waitingDetail ? waitingDetail : null },
       h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), label);
   }
-  const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail);
+  const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail, s.needsApproval);
   const SVG = 'http://www.w3.org/2000/svg';
   function sv(tag, attrs, ...kids) {
     const n = document.createElementNS(SVG, tag);
@@ -76,7 +83,7 @@
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
   function robot(status, mini) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
-    const mark = { wait: '?', extwait: '…', fail: '!', done: 'z' }[st];
+    const mark = { wait: '?', extwait: '…', ready: '✓', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
       sv('rect', { class: 'desk', x: 8, y: 70, width: 104, height: 5, rx: 2.5 }),
       sv('rect', { class: 'lapbase', x: 62, y: 67, width: 40, height: 3, rx: 1.5 }),
@@ -104,6 +111,7 @@
   }
   function timeText(s) {
     if (s.endedAt) return `sluttede ${ago(s.endedAt)}`;
+    if (s.status === 'faerdig') return `blev færdig ${ago(s.lastOutputAt)}`;
     if (s.status === 'venter' || s.status === 'afventer') return `har ventet i ${dur(s.lastOutputAt)}`;
     return `har arbejdet i ${dur(s.startedAt)}`;
   }
@@ -112,7 +120,8 @@
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
-    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
+    if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
+    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -144,7 +153,7 @@
   function summaryBody(s, r) {
     if (!r) return [h('p', { class: 'empty', text: 'Henter resumé…' })];
     if (!r.available) return [h('p', { class: 'empty', text: r.reason })];
-    const end = r.endedAt || (s.status === 'venter' ? r.lastOutputAt : Date.now());
+    const end = r.endedAt || (s.status === 'venter' || s.status === 'faerdig' ? r.lastOutputAt : Date.now());
     const mins = Math.max(1, Math.round((end - r.startedAt) / 60000));
     const head = !r.fileCount && !r.commits.length
       ? `Agenten har kørt i ${mins} min. Der er ingen ændringer i repoet, siden den startede.`
@@ -166,12 +175,12 @@
     return out;
   }
 
-  const ORDER = { venter: 0, fejlet: 1, afventer: 2, arbejder: 3, afsluttet: 4 };
+  const ORDER = { venter: 0, fejlet: 1, faerdig: 2, afventer: 3, arbejder: 4, afsluttet: 5 };
   const agentsIn = (list) => list.filter((s) => s.kind === 'agent').sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.startedAt - a.startedAt);
 
   function deskCard(s, withRepo) {
     const st = STATUS[s.status] || STATUS.afsluttet;
-    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
+    const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status),
       h('div', { class: 'deskinfo' },
@@ -296,9 +305,14 @@
     if (!state.data) return;
     const w = state.data.sessions.filter((s) => s.status === 'venter').length;
     const f = state.data.sessions.filter((s) => s.status === 'fejlet').length;
-    const key = `${w}/${f}`;
-    if (state.announced !== undefined && key !== state.announced && (w || f)) {
-      $('announce').textContent = [w ? plural(w, 'agent venter på dig', 'agenter venter på dig') : '', f ? plural(f, 'agent er stoppet med en fejl', 'agenter er stoppet med en fejl') : ''].filter(Boolean).join(', ');
+    const r = state.data.sessions.filter((s) => s.status === 'faerdig').length;
+    const key = `${w}/${f}/${r}`;
+    if (state.announced !== undefined && key !== state.announced && (w || f || r)) {
+      $('announce').textContent = [
+        w ? plural(w, 'agent venter på dig', 'agenter venter på dig') : '',
+        f ? plural(f, 'agent er stoppet med en fejl', 'agenter er stoppet med en fejl') : '',
+        r ? plural(r, 'agent er færdig', 'agenter er færdige') : '',
+      ].filter(Boolean).join(', ');
     }
     state.announced = key;
   }
@@ -306,6 +320,11 @@
   // ---------- beskeder, lyd og fanens titel ----------
   // Lidt humor, men tallet står altid først, så man kan aflæse fanen på et øjeblik.
   const FUN = {
+    godkendelse: [
+      '{a} mangler din godkendelse i {r}.',
+      '{a} vil gerne have lov til at fortsætte i {r}.',
+      '{a} venter på et ja eller nej fra dig i {r}.',
+    ],
     venter: [
       '{a} har rakt hånden op i {r}.',
       '{a} står og tripper i {r}.',
@@ -321,6 +340,11 @@
       '{a} har meldt sig syg i {r}.',
       'Av. {a} væltede i {r} og tog en fejlkode med i faldet.',
     ],
+    faerdig: [
+      '{a} er færdig med opgaven i {r}.',
+      '{a} melder klar i {r} – resultatet ligger til gennemsyn.',
+      '{a} har gjort arbejdet færdigt i {r}.',
+    ],
     afsluttet: [
       '{a} er færdig i {r} og ser mistænkeligt tilfreds ud.',
       '{a} har lukket computeren i {r} og er gået til frokost.',
@@ -328,6 +352,8 @@
     ],
     titleWait: ['Hallo? En agent venter', 'Nogen rækker hånden op', 'Du bliver savnet', 'Agenten tripper'],
     titleWaitMany: ['agenter venter – de er begyndt at snakke om dig', 'agenter står i kø', 'agenter tripper'],
+    titleReady: ['En agent er færdig', 'Opgave løst – klar til tjek'],
+    titleReadyMany: ['agenter er færdige – klar til tjek'],
     titleFail: ['En agent ligger ned', 'Der røg en agent', 'Agent nede – send kaffe'],
     titleWork: ['agent knokler – læn dig tilbage', 'agent arbejder – rør ingenting', 'agent har travlt'],
     titleWorkMany: ['agenter knokler – læn dig tilbage', 'agenter arbejder – rør ingenting', 'agenter har travlt'],
@@ -342,12 +368,15 @@
     const agents = sessions.filter((s) => s.kind === 'agent');
     const w = agents.filter((s) => s.status === 'venter');
     const f = agents.filter((s) => s.status === 'fejlet');
+    const rdy = agents.filter((s) => s.status === 'faerdig');
     const k = agents.filter((s) => s.status === 'arbejder');
     const ew = agents.filter((s) => s.status === 'afventer');
     let text = '';
     if (w.length === 1) text = `(1) ${pickStable(FUN.titleWait, w[0].id)}`;
     else if (w.length > 1) text = `(${w.length}) ${w.length} ${pickStable(FUN.titleWaitMany, w[0].id)}`;
     else if (f.length) text = `(!) ${pickStable(FUN.titleFail, f[0].id)}`;
+    else if (rdy.length === 1) text = `(✓) ${pickStable(FUN.titleReady, rdy[0].id)}`;
+    else if (rdy.length > 1) text = `(✓ ${rdy.length}) ${rdy.length} ${pickStable(FUN.titleReadyMany, rdy[0].id)}`;
     else if (k.length) text = `${k.length} ${pickStable(k.length === 1 ? FUN.titleWork : FUN.titleWorkMany, k[0].id)}`;
     else if (ew.length === 1) text = `Venter på ${ew[0].waitingFor || 'andet'}`;
     else if (ew.length > 1) text = `${ew.length} agenter venter på andet`;
@@ -391,14 +420,18 @@
   }
 
   function notify(s, kind) {
-    const text = fill(pickRandom(FUN[kind]), s);
+    const msgKey = kind === 'venter' && s.needsApproval ? 'godkendelse' : kind;
+    const text = fill(pickRandom(FUN[msgKey]), s);
     ding(kind);
     // Ser du allerede på netop den agent, er en besked bare støj.
     const watching = !document.hidden && state.repo === s.repo && state.view === `term:${s.id}`;
     if (watching) return;
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
-        const n = new Notification(kind === 'fejlet' ? 'En agent er gået ned' : kind === 'venter' ? 'En agent venter på dig' : 'En agent er færdig', { body: text, tag: `ct-${s.id}` });
+        const title = kind === 'fejlet' ? 'En agent er gået ned'
+          : kind === 'venter' ? (s.needsApproval ? 'En agent mangler godkendelse' : 'En agent venter på dig')
+          : 'En agent er færdig';
+        const n = new Notification(title, { body: text, tag: `ct-${s.id}` });
         n.onclick = () => { window.focus(); go(s.repo, `term:${s.id}`); n.close(); };
       } catch { /* nogle browsere tillader kun beskeder via en baggrundstjeneste */ }
     }
@@ -409,18 +442,24 @@
   function detectChanges() {
     if (!state.data) return;
     const prev = state.prevStatus;
+    const prevApproval = state.prevApproval || {};
     const next = {};
+    const nextApproval = {};
     for (const s of state.data.sessions) {
       if (s.kind !== 'agent') continue;
       next[s.id] = s.status;
+      nextApproval[s.id] = !!s.needsApproval;
       // prev === null: siden er lige åbnet. En agent vi aldrig har set før, er startet siden sidst – går den ned
       // med det samme, skal det også give en besked.
-      if (!prev || prev[s.id] === s.status) continue;
-      if (s.status === 'venter' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'venter');
+      const becameApproval = s.status === 'venter' && !!s.needsApproval && !prevApproval[s.id];
+      if (!prev || (prev[s.id] === s.status && !becameApproval)) continue;
+      if (s.status === 'venter') notify(s, 'venter');
+      else if (s.status === 'faerdig' && (prev[s.id] === 'arbejder' || prev[s.id] === 'afventer' || prev[s.id] === undefined)) notify(s, 'faerdig');
       else if (s.status === 'fejlet') notify(s, 'fejlet');
-      else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id)) notify(s, 'afsluttet');
+      else if (s.status === 'afsluttet' && !state.stoppedByMe.has(s.id) && prev[s.id] !== 'faerdig') notify(s, 'afsluttet');
     }
     state.prevStatus = next;
+    state.prevApproval = nextApproval;
   }
 
   // ---------- data ----------
@@ -449,7 +488,7 @@
     }
     // Tegn kun om, når noget faktisk har ændret sig – ellers ville tastaturfokus forsvinde hvert 3. sekund.
     const sig = JSON.stringify([state.offline, state.locked, state.data && state.data.repos, state.data && state.data.skipped,
-      state.data && state.data.sessions.map((x) => [x.id, x.status, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
+      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
     loadSummaries();
     if (sig === state.sig) { updateLiveText(); return; }
     state.sig = sig;
@@ -469,7 +508,7 @@
   }
 
   const sessionsFor = (repo) => (state.data ? state.data.sessions.filter((s) => s.repo === repo) : []);
-  const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && (s.status === 'arbejder' || s.status === 'venter' || s.status === 'afventer'));
+  const liveAgents = (repo) => sessionsFor(repo).filter((s) => s.kind === 'agent' && s.exitCode == null);
 
   // ---------- topbar + sidebar ----------
   function renderChrome() {
@@ -485,6 +524,7 @@
     const working = d.sessions.filter((s) => s.status === 'arbejder').length;
     const extWaiting = d.sessions.filter((s) => s.status === 'afventer').length;
     const waiting = d.sessions.filter((s) => s.status === 'venter').length;
+    const ready = d.sessions.filter((s) => s.status === 'faerdig').length;
     const dirty = d.repos.filter((r) => r.changed + r.untracked > 0).length;
     const totalTok = d.tokenSummary && d.tokenSummary.total;
     document.title = tabTitle(d.sessions);
@@ -494,6 +534,7 @@
       h('li', { class: working ? 'work' : '' }, h('strong', { text: String(working) }), ' arbejder'),
       extWaiting ? h('li', { class: 'extwait' }, h('strong', { text: String(extWaiting) }), ' venter på andet') : null,
       h('li', { class: waiting ? 'wait' : '' }, h('strong', { text: String(waiting) }), ' venter på dig'),
+      ready ? h('li', { class: 'ready' }, h('strong', { text: String(ready) }), ready === 1 ? ' færdig' : ' færdige') : null,
       totalTok ? h('li', { class: 'tokpill' }, h('button', {
         type: 'button', class: 'summarybtn', 'data-key': 'top:tokens',
         title: tokBreakdown(totalTok), onclick: () => go(null, null, 'tokens'),
@@ -644,6 +685,7 @@
     const first = state.data.agents[0];
     const waiting = agents.filter((s) => s.status === 'venter');
     const failed = agents.filter((s) => s.status === 'fejlet');
+    const ready = agents.filter((s) => s.status === 'faerdig');
     const working = agents.filter((s) => s.status === 'arbejder');
     const extWaiting = agents.filter((s) => s.status === 'afventer');
     const jump = (s, label, primary = true) => h('button', { type: 'button', class: `btn${primary ? ' primary' : ''}`, 'data-key': `next:${s.id}`, onclick: () => go(s.repo, `term:${s.id}`) }, label);
@@ -658,6 +700,12 @@
         h('p', { class: 'nexttitle', text: failed.length === 1 ? 'En agent stoppede med en fejl' : `${failed.length} agenter stoppede med en fejl` }),
         h('p', { class: 'nextsub', text: `${failed[0].name} i ${failed[0].repo}.` })),
       jump(failed[0], 'Se fejlen'));
+    }
+    if (ready.length) {
+      return h('div', { class: 'next ready' }, h('div', {},
+        h('p', { class: 'nexttitle', text: ready.length === 1 ? 'En agent er færdig' : `${ready.length} agenter er færdige` }),
+        h('p', { class: 'nextsub', text: `${ready[0].name} i ${ready[0].repo} blev færdig ${ago(ready[0].lastOutputAt)}.` })),
+      jump(ready[0], 'Se resultatet'));
     }
     if (working.length && extWaiting.length) {
       return h('div', { class: 'next work' }, h('div', {},
@@ -1216,7 +1264,7 @@
       ? [confirmButton('Stop', 'Tryk igen for at stoppe', 'danger', () => removeSession(s.id, false))]
       : [again, h('button', { type: 'button', class: 'btn small', onclick: () => removeSession(s.id, true) }, 'Fjern fra listen')].filter(Boolean)));
     const hint = $('termhint');
-    if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
+    if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« / »Færdig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
     // Knapper der kun giver mening mens agenten kører, vises ikke bagefter.
     const ask = $('askbox');
     if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé')] : []));
@@ -1465,7 +1513,8 @@
   $('skillsnav').addEventListener('click', () => go(null, null, 'skills'));
   $('tokensnav').addEventListener('click', () => go(null, null, 'tokens'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
-  setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+  const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
+  setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   refresh().then(renderMain);
 })();
