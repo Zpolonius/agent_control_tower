@@ -19,11 +19,12 @@ const HELP = `Control Tower
 
 // Læser kommandolinjen. Ukendte tilvalg er en fejl, så en tastefejl ikke bare bliver ignoreret.
 function parseArgs(argv) {
-  const out = { noOpen: false, help: false, root: null, error: null };
+  const out = { noOpen: false, tray: false, help: false, root: null, error: null };
   let onlyPaths = false;
   for (const a of argv) {
     if (!onlyPaths && a === '--') onlyPaths = true;
     else if (!onlyPaths && a === '--no-open') out.noOpen = true;
+    else if (!onlyPaths && a === '--tray') out.tray = true;
     else if (!onlyPaths && (a === '--help' || a === '-h')) out.help = true;
     else if (!onlyPaths && a.startsWith('-')) out.error = `Ukendt tilvalg: ${a}`;
     else if (out.root) out.error = 'Angiv kun én mappe.';
@@ -91,6 +92,22 @@ function main() {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+
+  if (args.tray) {
+    // Når Control Tower startes fra systembakken, kan værten sende "STOP" (eller lukke stdin),
+    // så serveren og alle terminaler lukkes lige så pænt som ved Ctrl+C.
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      buf += chunk;
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      if (lines.some((l) => l.trim() === 'STOP')) stop();
+    });
+    process.stdin.on('end', stop);
+    process.stdin.on('error', stop);
+    process.stdin.resume();
+  }
 }
 
 try {
