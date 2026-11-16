@@ -64,7 +64,7 @@
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
     afventer: { label: 'Venter på andet', cls: 'extwait', glyph: '◷' },
-    kvote: { label: 'Quota used – waiting for reset', cls: 'quota', glyph: '◴' },
+    kvote: { label: 'Limit reached – venter på reset', cls: 'quota', glyph: '◴' },
     venter: { label: 'Venter på dig', cls: 'wait', glyph: '◐' },
     faerdig: { label: 'Færdig', cls: 'ready', glyph: '✓' },
     aaben: { label: 'Åben', cls: 'open', glyph: '▪' },
@@ -151,13 +151,13 @@
     if (s.briefPending && s.exitCode == null) return `Starter op – opgaven som ${s.role ? s.role.name : 'rolle'} bliver indsat, når agenten er klar.`;
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
-    if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
+    if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Limit reached – venter på reset';
     // Et spørgsmål om godkendelse er det vigtigste at vise – ikke en tilfældig linje fra menuen.
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
-    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', kvote: 'Quota used – waiting for reset', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
+    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', kvote: 'Limit reached – venter på reset', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -544,7 +544,7 @@
       '{a} venter på et ja eller nej fra dig i {r}.',
     ],
     kvote: [
-      '{a} i {r}: Quota used – waiting for reset.',
+      '{a} i {r}: Limit reached – venter på reset.',
       '{a} har brugt sin kvote i {r} og venter på reset.',
       '{a} i {r} har ramt kvotegrænsen – venter på reset.',
     ],
@@ -575,7 +575,7 @@
     ],
     titleWait: ['Hallo? En agent venter', 'Nogen rækker hånden op', 'Du bliver savnet', 'Agenten tripper'],
     titleWaitMany: ['agenter venter – de er begyndt at snakke om dig', 'agenter står i kø', 'agenter tripper'],
-    titleQuota: ['Quota used – waiting for reset'],
+    titleQuota: ['Limit reached – venter på reset'],
     titleQuotaMany: ['agenter venter på quota reset'],
     titleReady: ['En agent er færdig', 'Opgave løst – klar til tjek'],
     titleReadyMany: ['agenter er færdige – klar til tjek'],
@@ -659,7 +659,7 @@
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
         const title = kind === 'fejlet' ? 'En agent er gået ned'
-          : kind === 'kvote' ? 'Quota used – waiting for reset'
+          : kind === 'kvote' ? 'Limit reached – venter på reset'
           : kind === 'venter' ? (s.needsApproval ? 'En agent mangler godkendelse' : 'En agent venter på dig')
           : 'En agent er færdig';
         const n = new Notification(title, { body: text, tag: `ct-${s.id}` });
@@ -1014,7 +1014,7 @@
     }
     if (quota.length) {
       return h('div', { class: 'next quota' }, h('div', {},
-        h('p', { class: 'nexttitle', text: quota.length === 1 ? 'Quota used – waiting for reset' : `${quota.length} agenter: Quota used – waiting for reset` }),
+        h('p', { class: 'nexttitle', text: quota.length === 1 ? 'Limit reached – venter på reset' : `${quota.length} agenter: Limit reached – venter på reset` }),
         h('p', { class: 'nextsub', text: `${quota[0].name} i ${quota[0].repo}${quota[0].waitingDetail ? ` – ${quota[0].waitingDetail}` : ''}.` })),
       jump(quota[0], 'Se status', false));
     }

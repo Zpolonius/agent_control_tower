@@ -8,7 +8,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
-const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, findApprovalOnScreen, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
+const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, findApprovalOnScreen, inspectQuota, SCREEN_QUOTA, isTaskDone, sanitizeDetail } = require('../server/wait-check');
 const { createSessions, lastLine } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
@@ -942,4 +942,41 @@ test('Gemini subagent: kørende subagent giver afventer (ikke færdig), og subag
   assert.equal(found.key, 'ctrl-k');
   assert.equal(isTaskDone(subagentApproval, { hadInput: true, strict: true }), false);
   assert.equal(inspectBuffer(subagentApproval), null);
+});
+
+test('inspectQuota: genkender Claude Code 5-hour/usage limit både før tur-afslutning og efter brugerinput', () => {
+  const beforeTurnDone = [
+    '● Background command "Run full unit tests" completed (exit code 0)',
+    '  ⎿  You\'ve hit your 5-hour limit · resets 7:50pm (Europe/Copenhagen)',
+    '● Usage limit reached · continuing automatically at 7:50pm · esc to cancel',
+    '✻ Cooked for 3s · done 18.20',
+    '~120k uncached · /clear to start fresh',
+    '>',
+    '  ▸▸ auto mode on (shift+tab to cycle)',
+  ].join('\r\n');
+  const q1 = inspectQuota(beforeTurnDone, SCREEN_QUOTA);
+  assert.ok(q1, 'skal finde limit-stop selvom Cooked/done står lige efter');
+  assert.equal(q1.waitingFor, 'quota reset');
+  assert.match(q1.detail, /Usage limit reached/i);
+
+  const afterPrompt = [
+    '✻ Cooked for 3s · done 18.20',
+    '> hvordan går det?',
+    '  ⚠ Usage limit reached · limit resets 7:50pm',
+    '  Continuing automatically at 7:50pm · Esc to cancel · /usage-credits to continue now',
+    '  ▸▸ auto mode on (shift+tab to cycle)',
+  ].join('\r\n');
+  const q2 = inspectQuota(afterPrompt, SCREEN_QUOTA);
+  assert.ok(q2, 'skal finde ⚠ Usage limit reached efter brugerinput');
+  assert.equal(q2.waitingFor, 'quota reset');
+  assert.match(q2.detail, /Usage limit reached · limit resets 7:50pm/i);
+
+  const fiveHourOnly = [
+    '  ⎿  You\'ve hit your 5-hour limit · resets 7:50pm (Europe/Copenhagen)',
+    '✻ Cooked for 3s · done 18.20',
+    '>',
+  ].join('\r\n');
+  const q3 = inspectQuota(fiveHourOnly, SCREEN_QUOTA);
+  assert.ok(q3, 'skal genkende You\'ve hit your 5-hour limit');
+  assert.equal(q3.waitingFor, 'quota reset');
 });
