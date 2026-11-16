@@ -2081,7 +2081,10 @@
     if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« / »Færdig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
     // Knapper der kun giver mening mens agenten kører, vises ikke bagefter.
     const ask = $('askbox');
-    if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé')] : []));
+    if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [
+      h('button', { type: 'button', class: 'btn small', id: 'compactbtn', title: 'Kør /compact i agenten for at komprimere konteksten', onclick: () => runCompact(s.id) }, '/compact'),
+      h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé'),
+    ] : []));
     if (hadFocus) { const b = box.querySelector('button'); if (b) b.focus(); }
   }
 
@@ -2204,7 +2207,7 @@
         h('span', { id: 'termstatus', class: 'termstatus' }, termStatus(s)),
         h('span', { class: 'hint', id: 'termhint' }),
         splitPicker(s, splitSession),
-        h('span', { id: 'askbox' }),
+        h('span', { id: 'askbox', class: 'termbuttons' }),
         h('span', { id: 'termbuttons', class: 'termbuttons' })),
       s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: !splitSession && s.status !== 'arbejder' && s.status !== 'afventer' },
         h('summary', { text: 'Resumé: hvad er der sket siden start' }),
@@ -2326,16 +2329,29 @@
     }
   }
 
-  async function askSummary(id) {
+  async function sendAgentCommand(id, text, { submit = false, message } = {}) {
     try {
-      await api(`/api/sessions/${id}/paste`, { method: 'POST', body: { text: 'Giv mig et kort resumé på dansk af, hvad du har lavet i denne session: hvilke filer du har ændret og hvorfor, hvad du har testet, og hvad der mangler eller er usikkert.' } });
-      toast('Spørgsmålet er indsat hos agenten. Tryk Enter for at sende.');
+      await api(`/api/sessions/${id}/paste`, { method: 'POST', body: { text } });
+      if (submit) {
+        await new Promise((r) => setTimeout(r, 80));
+        await api(`/api/sessions/${id}/approve`, { method: 'POST', body: { key: 'enter' } });
+      }
+      toast(message);
       const t = state.terms.get(id);
       if (t) t.term.focus();
     } catch (err) {
       toast(err.data && err.data.pending ? 'Der ligger allerede en usendt tekst hos agenten. Send den med Enter, eller slet den (Ctrl+U), og prøv igen.' : err.message, true);
     }
   }
+
+  const askSummary = (id) => sendAgentCommand(id, 'Giv mig et kort resumé på dansk af, hvad du har lavet i denne session: hvilke filer du har ændret og hvorfor, hvad du har testet, og hvad der mangler eller er usikkert.', {
+    message: 'Spørgsmålet er indsat hos agenten. Tryk Enter for at sende.',
+  });
+
+  const runCompact = (id) => sendAgentCommand(id, '/compact', {
+    submit: true,
+    message: '/compact sendt til agenten.',
+  });
 
   async function start(kind, agentId, repoName, roleId, input) {
     const repo = repoName || state.repo;
