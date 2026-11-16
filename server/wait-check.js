@@ -483,12 +483,18 @@ function strongPromptAt(lines, i, isMine) {
   return null;
 }
 
+const CTRL_K_APPROVE_RE = /\bctrl\+k\s+(?:approve|allow|accept|confirm)\b/i;
+
 function findApprovalOnScreen(text, { mine = [], limit = 80 } = {}) {
   const { turnLines } = splitTurnLines(text, limit);
   const isMine = mineFilter(mine);
   for (let i = turnLines.length - 1; i >= 0; i -= 1) {
     const anchor = strongPromptAt(turnLines, i, isMine);
-    if (anchor) return { line: anchor, count: turnLines.filter((x) => x === anchor).length };
+    if (anchor) {
+      const isCtrlK = CTRL_K_APPROVE_RE.test(turnLines[i])
+        || turnLines.slice(i + 1, i + 9).some((x) => !isMine(x) && CTRL_K_APPROVE_RE.test(x));
+      return { line: anchor, count: turnLines.filter((x) => x === anchor).length, key: isCtrlK ? 'ctrl-k' : null };
+    }
   }
   return null;
 }

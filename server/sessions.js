@@ -106,8 +106,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     }
     const now = Date.now();
     // Nyt spørgsmål: anden tekst, eller samme tekst én gang mere på skærmen (fx aider, der spørger igen).
-    if (!s.prompt || s.prompt.line !== found.line || found.count > s.prompt.count) { s.prompt = { line: found.line, count: found.count, at: now }; s.lastPromptAt = now; }
-    else s.prompt.count = found.count;
+    if (!s.prompt || s.prompt.line !== found.line || found.count > s.prompt.count) { s.prompt = { line: found.line, count: found.count, at: now, key: found.key || null }; s.lastPromptAt = now; }
+    else { s.prompt.count = found.count; s.prompt.key = found.key || null; }
     s.approvalOpen = s.lastAnswerAt < s.prompt.at;
     if (!s.approvalOpen) { s.approvalSince = null; return false; }
     if (!s.approvalSince) s.approvalSince = s.prompt.at;
@@ -158,6 +158,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       startedAt: s.startedAt, lastOutputAt: s.lastOutputAt, endedAt: s.endedAt,
       exitCode: s.exitCode, status: st,
       needsApproval: approval,
+      approvalKey: approval && s.prompt ? s.prompt.key || null : null,
       waitingFor: quota ? quota.waitingFor : (wait ? wait.waitingFor : null),
       waitingDetail: quota ? quota.detail : (wait ? wait.detail : null),
       lastLine: s.kind === 'agent' ? lastLine(s.screenText(), s.exitCode != null && s.exitCode !== 0 && !s.killed) : '',
@@ -362,8 +363,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return 'ok';
   }
 
-  // Sender et hurtig-svar (fx ja/nej/enter/1/2/esc) direkte til en kørende agent fra overblikket.
-  const KEYS = { enter: '\r', yes: 'y\r', no: 'n\r', '1': '1\r', '2': '2\r', esc: '\x1b' };
+  // Sender et hurtig-svar (fx ja/nej/enter/1/2/esc/ctrl-k) direkte til en kørende agent fra overblikket.
+  const KEYS = { enter: '\r', yes: 'y\r', no: 'n\r', '1': '1\r', '2': '2\r', esc: '\x1b', 'ctrl-k': '\x0b' };
   function approve(id, key) {
     const s = get(id);
     if (!s || s.exitCode != null) return 'gone';

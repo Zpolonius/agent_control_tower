@@ -939,6 +939,7 @@ test('Gemini subagent: kørende subagent giver afventer (ikke færdig), og subag
   const found = findApprovalOnScreen(subagentApproval);
   assert.ok(found, 'skal finde godkendelses-prompt');
   assert.equal(found.line, 'self needs approval for Bash');
+  assert.equal(found.key, 'ctrl-k');
   assert.equal(isTaskDone(subagentApproval, { hadInput: true, strict: true }), false);
   assert.equal(inspectBuffer(subagentApproval), null);
 });
