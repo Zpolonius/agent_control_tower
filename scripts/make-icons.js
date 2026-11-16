@@ -194,11 +194,51 @@ function writeIconset(dir) {
   }
 }
 
+function encodeIcns() {
+  const specs = [
+    ['icp4', 16],
+    ['icp5', 32],
+    ['icp6', 64],
+    ['ic07', 128],
+    ['ic08', 256],
+    ['ic09', 512],
+    ['ic10', 1024],
+    ['ic11', 32],
+    ['ic12', 64],
+    ['ic13', 256],
+    ['ic14', 512],
+  ];
+  const cache = new Map();
+  const chunks = [];
+  for (const [type, size] of specs) {
+    if (!cache.has(size)) cache.set(size, encodePng(size, renderRgba(size)));
+    const png = cache.get(size);
+    const entry = Buffer.alloc(8 + png.length);
+    entry.write(type, 0, 4, 'ascii');
+    entry.writeUInt32BE(entry.length, 4);
+    png.copy(entry, 8);
+    chunks.push(entry);
+  }
+  const total = 8 + chunks.reduce((sum, c) => sum + c.length, 0);
+  const header = Buffer.alloc(8);
+  header.write('icns', 0, 4, 'ascii');
+  header.writeUInt32BE(total, 4);
+  return Buffer.concat([header, ...chunks]);
+}
+
+function writeIcns(outFile) {
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  fs.writeFileSync(outFile, encodeIcns());
+}
+
 if (require.main === module) {
   const args = process.argv.slice(2);
   const idxSet = args.indexOf('--iconset');
+  const idxIcns = args.indexOf('--icns');
   if (idxSet !== -1 && args[idxSet + 1]) {
     writeIconset(args[idxSet + 1]);
+  } else if (idxIcns !== -1 && args[idxIcns + 1]) {
+    writeIcns(args[idxIcns + 1]);
   } else {
     const outFile = args[0] || path.join(__dirname, '..', 'assets', 'control-tower.ico');
     writeIco(outFile);
@@ -206,4 +246,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { renderRgba, encodePng, encodeIco, writeIco, writeIconset };
+module.exports = { renderRgba, encodePng, encodeIco, encodeIcns, writeIco, writeIcns, writeIconset };

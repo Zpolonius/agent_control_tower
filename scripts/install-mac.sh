@@ -104,7 +104,7 @@ EOF
 
 osacompile -s -o "$APP_PATH" "$APPLESCRIPT_FILE"
 
-# Tilføj Control Tower-ikon hvis Node + iconutil er tilgængelige
+# Tilføj Control Tower-ikon hvis Node er tilgængelig
 NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ]; then
   for c in /opt/homebrew/bin/node /usr/local/bin/node; do
@@ -112,18 +112,22 @@ if [ -z "$NODE_BIN" ]; then
   done
 fi
 
-if [ -n "$NODE_BIN" ] && command -v iconutil >/dev/null 2>&1; then
-  ICONSET_DIR="$TMP_DIR/ControlTower.iconset"
-  "$NODE_BIN" "$SCRIPT_DIR/make-icons.js" --iconset "$ICONSET_DIR"
-  iconutil -c icns "$ICONSET_DIR" -o "$APP_PATH/Contents/Resources/applet.icns"
+if [ -n "$NODE_BIN" ]; then
+  "$NODE_BIN" "$SCRIPT_DIR/make-icons.js" --icns "$APP_PATH/Contents/Resources/applet.icns"
+  rm -f "$APP_PATH/Contents/Resources/Assets.car"
 fi
 
 if [ -x /usr/libexec/PlistBuddy ]; then
   PLIST="$APP_PATH/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile applet" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string applet" "$PLIST"
   /usr/libexec/PlistBuddy -c "Set :CFBundleName Control Tower" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleName string Control Tower" "$PLIST"
   /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Control Tower" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Control Tower" "$PLIST"
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.control-tower.app" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string local.control-tower.app" "$PLIST"
 fi
+
+touch "$APP_PATH"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH" >/dev/null 2>&1 || true
 
 # Opdater Desktop-alias hvis muligt (ikke-fatalt hvis headless)
 if [ -d "$HOME/Desktop" ]; then
