@@ -7,6 +7,7 @@
     "start": "node server/index.js",
     "tray": "node server/index.js --tray",
     "shortcut": "node scripts/setup.js",
+    "postinstall": "node scripts/postinstall.js",
     "test": "node --test"
   },
   "license": "UNLICENSED",
