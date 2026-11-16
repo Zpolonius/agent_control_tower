@@ -64,7 +64,7 @@ on run
 		if errMsg contains "er optaget" then
 			set portNum to "4317"
 			try
-				set portNum to do shell script "printf %s " & quoted form of errMsg & " | sed -nE 's/.*Port ([0-9]+) er optaget.*/\\1/p' | head -n 1"
+				set portNum to do shell script "printf %s " & quoted form of errMsg & " | sed -nE 's/.*Port ([0-9]+) er optaget.*/\\\\1/p' | head -n 1"
 				if portNum is "" then set portNum to "4317"
 			end try
 			set res to display dialog errMsg & return & return & "Vil du åbne http://127.0.0.1:" & portNum & " i browseren i stedet?" with title "Control Tower" buttons {"Luk", "Åbn i browser"} default button "Åbn i browser" with icon caution
