@@ -35,7 +35,8 @@ const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|a
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
 const ACTIVE_SUBAGENT_LINE_RE = /^(?:[•●⏺]\s*)?(?:Task|Agent)\([^)]+\)\s*·\s*(?!.*\b(?:done|completed|finished|failed|cancelled|canceled)\b).+\s*·\s*\d+[hms](?:\s*\d+[hms]?)*$/i;
-const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagents?\b|\b[1-9]\d*\s+subagent\(s\)?/i;
+// Fx Gemini "1 subagent(s)" og Claude Code "1 background agent" / "2 local agents" / "2 agents running" i bunden.
+const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagents?\b|\b[1-9]\d*\s+subagent\(s\)?|\b[1-9]\d*\s+(?:background|local|async|running)\s+(?:sub-?)?agents?\b(?!.{0,30}\b(?:done|completed|finished|failed|færdige?)\b)|\b[1-9]\d*\s+(?:sub-?)?agents?\s+(?:running|kører)\b/i;
 const isActiveSubagentLine = (l) => ACTIVE_SUBAGENT_LINE_RE.test(l)
   || SUBAGENT_FOOTER_RE.test(l)
   || /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i.test(l);

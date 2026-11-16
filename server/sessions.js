@@ -142,9 +142,12 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     if (!isIdleAgent(s)) return 'arbejder';
     // En indsat tekst venter på dit Enter – det er dig der skal handle, uanset hvad teksten indeholder.
     if (s.pendingPaste) return 'venter';
+    // Venter agenten på sine subagenter, er den ikke færdig – selvom dens egen tur er slut.
+    const wait = currentWait(s);
+    if (wait && wait.waitingFor === 'subagenter') return 'afventer';
     // En færdig tur vinder over en proces, der kører videre i baggrunden (fx en dev-server agenten har startet).
     if (isTaskDone(s.screenText(), { hadInput: s.hadUserInput, ignorePrompts: answeredPromptVisible(s), limit: SCREEN_LIMIT, strict: true, mine: mine(s) })) return 'faerdig';
-    if (currentWait(s)) return 'afventer';
+    if (wait) return 'afventer';
     return 'venter';
   }
 
