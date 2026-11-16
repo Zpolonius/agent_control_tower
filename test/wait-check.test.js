@@ -8,7 +8,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const cfg = require('../server/config');
 const { createApp } = require('../server/app');
-const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
+const { createWaitChecker, inspectProcessTree, inspectBuffer, hasApprovalPrompt, findApprovalOnScreen, inspectQuota, isTaskDone, sanitizeDetail } = require('../server/wait-check');
 const { createSessions, lastLine } = require('../server/sessions');
 
 test('inspectProcessTree: ignorerer hovedagent, konsol-hjælpere, MCP og sleep', () => {
@@ -887,4 +887,59 @@ test('API: initialPaste ved opstart, POST /approve og GET /diff', async () => {
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('Gemini subagent: kørende subagent giver afventer (ikke færdig), og subagent-godkendelse giver godkendelse', () => {
+  const runningSubagent = [
+    'Baseline er registreret (190/191 filer bestået, 2930/2932 tests bestået). Udvikler-agenten arbejder nu på issue #305.',
+    '>',
+    '• Agent(self: Developer for issue 305) · gemini-3.8-flash-tiered · Search non-interactive message in node_modules · 28m5s',
+    '? for shortcuts                                                                        auto · Gemini 4 Hydrogen · medium · 1 subagent(s)',
+  ].join('\r\n');
+  assert.equal(isTaskDone(runningSubagent, { hadInput: true, strict: true }), false);
+  assert.equal(findApprovalOnScreen(runningSubagent), null);
+  assert.equal(inspectBuffer(runningSubagent).waitingFor, 'subagenter');
+
+  // Footer alene med 1 subagent(s) er nok, mens 0 subagent(s) ikke tæller som aktiv
+  const footerOnly = [
+    'Arbejder videre i baggrunden.',
+    '>',
+    '? for shortcuts   auto · Gemini 4 Hydrogen · medium · 1 subagent(s)',
+  ].join('\r\n');
+  assert.equal(isTaskDone(footerOnly, { hadInput: true, strict: true }), false);
+  assert.equal(inspectBuffer(footerOnly).waitingFor, 'subagenter');
+
+  const zeroSubagents = [
+    'Opgaven er løst.',
+    '>',
+    '? for shortcuts   auto · Gemini 4 Hydrogen · medium · 0 subagent(s)',
+  ].join('\r\n');
+  assert.equal(isTaskDone(zeroSubagents, { hadInput: true, strict: true }), true);
+  assert.equal(inspectBuffer(zeroSubagents), null);
+
+  // Afklippet højrekant i smal Mission Control-visning (39m39 uden 's', 1 subagent(s uden ')')
+  const clippedMissionControl = [
+    'Udvikler-agenten arbejder nu på issue #305.',
+    '>',
+    '• Agent(self: Developer for issue 305) · gemini-3.8-flash-tiered · Testing... · 39m39',
+    '? for shortcuts   auto · Gemini 4 Hydrogen · medium · 1 subagent(s',
+  ].join('\r\n');
+  assert.equal(isTaskDone(clippedMissionControl, { hadInput: true, strict: true }), false);
+  assert.equal(inspectBuffer(clippedMissionControl).waitingFor, 'subagenter');
+
+  // Subagent der kræver godkendelse i Gemini (ctrl+k approve · alt+j manage)
+  const subagentApproval = [
+    'self needs approval for Bash',
+    '• Bash(cd /Users/u/app/Tirsdag-2.0-issue-305 && npx prisma migrate dev --name add_archived_by)',
+    'ctrl+k approve · alt+j manage',
+    '>',
+    '• Agent(self: Developer for issue 305) · gemini-3.8-flash-tiered · Blocked · Bash · 27m42s',
+    '? for shortcuts                                                                        auto · Gemini 4 Hydrogen · medium · 1 subagent(s)',
+  ].join('\r\n');
+  const found = findApprovalOnScreen(subagentApproval);
+  assert.ok(found, 'skal finde godkendelses-prompt');
+  assert.equal(found.line, 'self needs approval for Bash');
+  assert.equal(found.key, 'ctrl-k');
+  assert.equal(isTaskDone(subagentApproval, { hadInput: true, strict: true }), false);
+  assert.equal(inspectBuffer(subagentApproval), null);
 });

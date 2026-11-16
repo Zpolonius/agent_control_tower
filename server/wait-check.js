@@ -30,10 +30,15 @@ const FOOTER_RE = /^(?:\?\s*for shortcuts\b|shift\+tab\b|for shortcuts\b|.*shift
 const USER_WAIT_RE = /\b((?:waiting|awaiting)\s+(?:for\s+)?(?:user|you|your|input|reply|response|confirmation|approval|permission|decision)|venter på (?:dig|dit svar|svar fra dig|godkendelse|tilladelse|input))\b/i;
 const USER_PROMPT_RE = /(?:^|\b)(?:do you want to|would you like to|should i (?:run|execute|proceed|continue)|run this command|kør denne kommando|allow once|always allow|allow always|allow for this (?:session|conversation|project|workspace)|allow execution|allow this (?:command|action|tool|request|edit|change|operation)|allow (?:codex|claude|gemini|opencode|aider) to|allow (?:mcp )?tool|yes,?\s*allow|don't ask again|approve and run|approve (?:this|command|action|tool|request|execution)|confirm (?:this|command|action|execution)|(?:approval|confirmation|permission) required|(?:needs|requires) (?:your )?(?:approval|permission|confirmation)|press enter|enter (?:accept|to (?:confirm|approve|allow|run|submit|select|continue))|space to select|tryk på enter|select an option|choose an option|type your own answer|type here to tell|chat about this|allow edits? to|create new file|esc (?:cancel|reject|deny|dismiss|to (?:cancel|reject|deny|decline|dismiss))|(?:run|execute) (?:shell )?command\?|add .{1,80} to the chat\?|implement this plan\?|(?:do you )?trust (?:this|the files in this) (?:folder|workspace|directory|repo|project)\?|proceed\?|continue\?|apply (?:this )?(?:edit|change|patch)\?)(?!\w)/i;
 const YES_NO_RE = /(?:\[(?:y\/n(?:\/[a-z]+)*|yes\/no)\]|\((?:y\/n(?:\/[a-z]+)*|yes\/no)\)|\(y\)es\s*\/\s*\(n\)o|\[(?:yes|no)\]\s*:\s*$|(?:^|\s)y\/n\s*[?:]?\s*$)/i;
-const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$)/i;
+const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|allow|always\s+allow|approve|run|accept|confirm|ja)\b|[❯›▸►]\s*1[.)]\s+\S|(?:[❯›▸►]\s*)?1[.)]\s+.+\(recommended\)\s*$|(?:[❯>›▸►●•*]|\[[x*]\]|\([●*x]\))\s*(?:yes(?:\s*,\s*allow\b.*)?|allow(?:\s+(?:once|always|this(?:\s+\w+)?|for\b.*))?|always\s+allow(?:\b.*)?|approve(?:\s+(?:once|this))?|run(?:\s+(?:once|command|this(?:\s+command)?))?|accept|confirm|ja)\s*(?:\([^)]*\))?\s*$|[❯›▸►]\s*run(?:\s+command)?\s*$|\[(?:yes|allow(?:\s+once)?|run|approve)\]\s*(?:\||\/|\s)\s*\[(?:no|deny|reject|cancel)\]|(?:[❯>›▸►●•*]\s*)?(?:allow(?:\s+once)?|yes|run)\s*[·|\/]\s*(?:always\s+allow\s*[·|\/]\s*)?(?:deny|reject|cancel|no)\s*$|\bctrl\+[a-z]\s+(?:approve|allow|accept|confirm)\s*[·|\/]\s*(?:alt|ctrl|esc)\+[a-z]\s+\w+\b)/i;
 const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
+const ACTIVE_SUBAGENT_LINE_RE = /^(?:[•●⏺]\s*)?(?:Task|Agent)\([^)]+\)\s*·\s*(?!.*\b(?:done|completed|finished|failed|cancelled|canceled)\b).+\s*·\s*\d+[hms](?:\s*\d+[hms]?)*$/i;
+const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagents?\b|\b[1-9]\d*\s+subagent\(s\)?/i;
+const isActiveSubagentLine = (l) => ACTIVE_SUBAGENT_LINE_RE.test(l)
+  || SUBAGENT_FOOTER_RE.test(l)
+  || /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i.test(l);
 const QUOTA_RE = /\b(individual quota reached|please upgrade your subscription to increase your limits|quota (?:reached|exceeded|exhausted|used)|(?:usage|session|rate|plan|5-hour|weekly|daily) limit (?:reached|exceeded)|you(?:'ve| have) (?:hit|reached) your (?:usage )?limit|kvote(?:n er)? (?:nået|opbrugt|brugt))\b/i;
 const QUOTA_RESET_RE = /\b(resets?(?:\s+(?:in|at|on)\b)?[^.\r\n]{0,60}|nulstilles\b[^.\r\n]{0,60})/i;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
@@ -61,6 +66,8 @@ const PROC_RULES = [
 const BUFFER_RULES = [
   { waitingFor: 'subagenter', re: /\b(spawning (?:sub-?)?agents?|waiting for (?:\d+ )?(?:sub-?)?agents?|running \d+ (?:sub-?)?agents?|\d+ (?:sub-?|background )?agents? running|agent tools? running|(?:sub-?|background )agents? running|kører subagenter|venter på subagenter)\b/i },
   { waitingFor: 'subagenter', re: /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i },
+  { waitingFor: 'subagenter', re: ACTIVE_SUBAGENT_LINE_RE },
+  { waitingFor: 'subagenter', re: SUBAGENT_FOOTER_RE },
   { waitingFor: 'e2e-tests', re: /\b(playwright|cypress|puppeteer|selenium|webdriver|appium|maestro|detox|patrol|e2e[- ]tests?|end-to-end)\b/i },
   { waitingFor: 'tests', re: /\b(running tests?|kører tests?|test suite|waiting for tests?|vitest|jest|mocha|pytest|flutter test|dart test|npm test|pnpm test|cargo test|go test|node --test)\b/i },
   { waitingFor: 'emulator', re: /\b(waiting for emulator|starting emulator|booting emulator|android emulator|ios simulator|adb wait-for-device|waiting for (?:android )?device|simctl boot|venter på emulator)\b/i },
@@ -256,12 +263,12 @@ function cleanLines(buffer) {
   const rawLines = text
     .split(/[\r\n]+/)
     .map((l) => l.replace(/^[│┃]+\s*|\s*[│┃]+$/g, '').trim())
-    .filter((l) => l && !CHROME_RE.test(l) && (INTERRUPT_RE.test(l) || !FOOTER_RE.test(l)));
+    .filter((l) => l && !CHROME_RE.test(l) && (INTERRUPT_RE.test(l) || SUBAGENT_FOOTER_RE.test(l) || !FOOTER_RE.test(l)));
   return collapseStatusRedraws(rawLines);
 }
 
 function redrawKey(line) {
-  if (!isSpinnerLine(line) && !INTERRUPT_RE.test(line) && !BG_STATUS_LINE_RE.test(line)) return null;
+  if (!isSpinnerLine(line) && !INTERRUPT_RE.test(line) && !BG_STATUS_LINE_RE.test(line) && !SUBAGENT_FOOTER_RE.test(line)) return null;
   return line
     .replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✻✽✢✳●]\s*/, '* ')
     .replace(/\b\d+(?:\.\d+)?\s*(?:ms|[hms])\b/gi, '#t')
@@ -373,14 +380,15 @@ function inspectBuffer(buffer) {
   const recentBottom = turnLines.slice(-6);
   const hasInterrupt = turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l));
   const hasSpinner = recentBottom.some(isSpinnerLine);
+  const hasActiveSubagent = recentBottom.some(isActiveSubagentLine);
 
   // Eksplicitte godkendelses-/bruger-prompts og kvote-stop vinder altid – også når baggrundsopgaver kører.
   if (findActivePromptIndex(turnLines) !== -1 || findActiveQuotaIndex(turnLines) !== -1) {
     return null;
   }
 
-  // Uden aktiv spinner eller interrupt-linje betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
-  if (!hasInterrupt && !hasSpinner) {
+  // Uden aktiv spinner, interrupt-linje eller kørende subagent betyder en tom prompt eller et spørgsmål nederst, at agenten venter på dig.
+  if (!hasInterrupt && !hasSpinner && !hasActiveSubagent) {
     const lastBottom = turnLines.slice(-4);
     if (lastBottom.some((l) => BARE_PROMPT_RE.test(l) || looksLikeQuestion(l))) return null;
   }
@@ -426,7 +434,7 @@ function isTaskDone(buffer, { hadInput = false, ignorePrompts = false, limit = 2
 
   if ((!ignorePrompts && (strict ? promptIn(turnLines) : findActivePromptIndex(turnLines) !== -1)) || findActiveQuotaIndex(turnLines, 11, strict) !== -1) return false;
   if (turnLines.slice(-10).some((l) => INTERRUPT_RE.test(l))) return false;
-  if (turnLines.slice(-6).some(isSpinnerLine)) return false;
+  if (turnLines.slice(-6).some((l) => isSpinnerLine(l) || isActiveSubagentLine(l))) return false;
 
   if (sawTurnDone) {
     // På skærmen står linjen "Worked for …" fra den forrige tur stadig, når en ny tur er i gang. Kommer der nyt fra agenten
@@ -455,7 +463,7 @@ function isTaskDone(buffer, { hadInput = false, ignorePrompts = false, limit = 2
 // Et enkelt ord som "proceed?" eller "Create new file" midt i agentens svar er ikke nok.
 // draft: det du selv er ved at skrive i feltet – "> ja" er dit svar, ikke agentens spørgsmål.
 // Returnerer { line, count } – count er hvor mange gange netop den linje står på skærmen (bruges til at se et nyt spørgsmål).
-const OPTION_RE = /^(?:[❯›>▸►●•*]\s*)?(?:\d[.)]|\[\d\])\s+\S|\besc\b.{0,20}\b(?:cancel|reject|deny|dismiss|decline)\b|^(?:[❯›>▸►●•*]\s*)?(?:yes|no|allow|deny|always allow|approve|reject)\b/i;
+const OPTION_RE = /^(?:[❯›>▸►●•*]\s*)?(?:\d[.)]|\[\d\])\s+\S|\besc\b.{0,20}\b(?:cancel|reject|deny|dismiss|decline)\b|^(?:[❯›>▸►●•*]\s*)?(?:yes|no|allow|deny|always allow|approve|reject)\b|\bctrl\+[a-z]\s+(?:approve|allow|accept|confirm)\b/i;
 // mine: tekster du selv har skrevet eller sendt. "> ja" eller "> approve" i feltet er dig, ikke agentens spørgsmål.
 function mineFilter(mine) {
   const set = new Set((mine || []).map((x) => String(x).trim()).filter(Boolean));
@@ -475,12 +483,18 @@ function strongPromptAt(lines, i, isMine) {
   return null;
 }
 
+const CTRL_K_APPROVE_RE = /\bctrl\+k\s+(?:approve|allow|accept|confirm)\b/i;
+
 function findApprovalOnScreen(text, { mine = [], limit = 80 } = {}) {
   const { turnLines } = splitTurnLines(text, limit);
   const isMine = mineFilter(mine);
   for (let i = turnLines.length - 1; i >= 0; i -= 1) {
     const anchor = strongPromptAt(turnLines, i, isMine);
-    if (anchor) return { line: anchor, count: turnLines.filter((x) => x === anchor).length };
+    if (anchor) {
+      const isCtrlK = CTRL_K_APPROVE_RE.test(turnLines[i])
+        || turnLines.slice(i + 1, i + 9).some((x) => !isMine(x) && CTRL_K_APPROVE_RE.test(x));
+      return { line: anchor, count: turnLines.filter((x) => x === anchor).length, key: isCtrlK ? 'ctrl-k' : null };
+    }
   }
   return null;
 }

@@ -283,14 +283,23 @@
   function quickApproveButtons(s, prefix = 'q') {
     const quick = [];
     if (s.exitCode == null && s.status === 'venter' && s.needsApproval) {
-      quick.push(
-        h('button', { type: 'button', class: 'btn small primary', 'data-key': `${prefix}enter:${s.id}`,
-          onclick: () => quickApprove(s.id, 'enter', `Godkendte (Enter) hos ${s.name}`) }, 'Godkend (Enter)'),
-        h('button', { type: 'button', class: 'btn small', 'data-key': `${prefix}yes:${s.id}`,
-          onclick: () => quickApprove(s.id, 'yes', `Sendte Ja (y) til ${s.name}`) }, 'Ja (y)'),
-        h('button', { type: 'button', class: 'btn small danger', 'data-key': `${prefix}esc:${s.id}`,
-          onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
-      );
+      if (s.approvalKey === 'ctrl-k') {
+        quick.push(
+          h('button', { type: 'button', class: 'btn small primary', 'data-key': `${prefix}ctrlk:${s.id}`,
+            onclick: () => quickApprove(s.id, 'ctrl-k', `Godkendte (Ctrl+K) hos ${s.name}`) }, 'Godkend (Ctrl+K)'),
+          h('button', { type: 'button', class: 'btn small danger', 'data-key': `${prefix}esc:${s.id}`,
+            onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
+        );
+      } else {
+        quick.push(
+          h('button', { type: 'button', class: 'btn small primary', 'data-key': `${prefix}enter:${s.id}`,
+            onclick: () => quickApprove(s.id, 'enter', `Godkendte (Enter) hos ${s.name}`) }, 'Godkend (Enter)'),
+          h('button', { type: 'button', class: 'btn small', 'data-key': `${prefix}yes:${s.id}`,
+            onclick: () => quickApprove(s.id, 'yes', `Sendte Ja (y) til ${s.name}`) }, 'Ja (y)'),
+          h('button', { type: 'button', class: 'btn small danger', 'data-key': `${prefix}esc:${s.id}`,
+            onclick: () => quickApprove(s.id, 'esc', `Afviste (Esc) hos ${s.name}`) }, 'Afvis (Esc)'),
+        );
+      }
     }
     if (s.exitCode == null && s.pendingPaste) {
       quick.push(
@@ -718,7 +727,7 @@
     }
     // Tegn kun om, når noget faktisk har ændret sig – ellers ville tastaturfokus forsvinde hvert 3. sekund.
     const sig = JSON.stringify([state.offline, state.locked, state.data && state.data.repos, state.data && state.data.skipped,
-      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
+      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.approvalKey, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
     loadSummaries();
     if (sig === state.sig) { updateLiveText(); return; }
     state.sig = sig;
