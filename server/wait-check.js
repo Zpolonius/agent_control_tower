@@ -39,7 +39,7 @@ const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagents?\b|\b[1-9]\d*\s+subagent\(s\)
 const isActiveSubagentLine = (l) => ACTIVE_SUBAGENT_LINE_RE.test(l)
   || SUBAGENT_FOOTER_RE.test(l)
   || /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i.test(l);
-const QUOTA_RE = /\b(individual quota reached|please upgrade your subscription to increase your limits|quota (?:reached|exceeded|exhausted|used)|(?:usage|session|rate|plan|5-hour|weekly|daily) limit (?:reached|exceeded)|you(?:'ve| have) (?:hit|reached) your (?:usage )?limit|kvote(?:n er)? (?:nået|opbrugt|brugt))\b/i;
+const QUOTA_RE = /\b(individual quota reached|please upgrade your subscription to increase your limits|quota (?:reached|exceeded|exhausted|used)|(?:usage|session|rate|plan|5-hour|weekly|daily) limit (?:reached|exceeded)|you(?:'ve| have) (?:hit|reached) your (?:(?:usage|session|rate|plan|5-hour|weekly|daily)\s+)?limit|kvote(?:n er)? (?:nået|opbrugt|brugt))\b/i;
 const QUOTA_RESET_RE = /\b(resets?(?:\s+(?:in|at|on)\b)?[^.\r\n]{0,60}|nulstilles\b[^.\r\n]{0,60})/i;
 const COMPLETION_RE = /(?:\b\d+\s+(?:passed|failed|skipped)\b|\ball tests passed\b|\btest suite (?:passed|failed|finished)\b|\bexited with code\b|\bdone in \d|\bbuild succeeded\b|\bcompiled successfully\b)/i;
 const TURN_DONE_RE = /^(?:[✶✻✽✢✳*●⏺·]\s*\S+\s+for\s+(?:\d+[hms]\s*)+(?:\s*·\s*done\b.*)?|.*\bfor\s+(?:\d+[hms]\s*)+\s*·\s*done\b.*)$/i;
@@ -346,12 +346,17 @@ function findActiveQuotaIndex(turnLines, window = 11, strict = false) {
 // window: hvor tæt på bunden kvote-beskeden skal stå. På den gengivne skærm skal den være blandt de sidste linjer,
 // så en agent der bare nævner "rate limit exceeded" midt i et svar, ikke tæller.
 function inspectQuota(buffer, { limit = 20, window = 11, strict = false } = {}) {
-  const { turnLines } = splitTurnLines(buffer, limit);
-  const idx = findActiveQuotaIndex(turnLines, window, strict);
+  const { lines, sawTurnDone, turnLines } = splitTurnLines(buffer, limit);
+  let targetLines = turnLines;
+  let idx = findActiveQuotaIndex(targetLines, window, strict);
+  if (idx === -1 && sawTurnDone && !turnLines.some((l) => /^[●⏺⎿•✻✶✳✢]/.test(l))) {
+    targetLines = lines;
+    idx = findActiveQuotaIndex(targetLines, window, strict);
+  }
   if (idx === -1) return null;
-  const line = turnLines[idx];
-  const windowLines = turnLines
-    .slice(idx, Math.min(turnLines.length, idx + 3))
+  const line = targetLines[idx];
+  const windowLines = targetLines
+    .slice(idx, Math.min(targetLines.length, idx + 3))
     .filter((l) => !BARE_PROMPT_RE.test(l));
   const selfReset = line.match(QUOTA_RESET_RE);
   const nextReset = !selfReset ? windowLines.slice(1).join(' ').match(QUOTA_RESET_RE) : null;
@@ -369,7 +374,7 @@ function inspectQuota(buffer, { limit = 20, window = 11, strict = false } = {}) 
   return {
     waitingFor: 'quota reset',
     resetText: resetInfo || null,
-    detail: sanitizeDetail(rawDetail) || 'Quota used – waiting for reset',
+    detail: sanitizeDetail(rawDetail) || 'Limit reached – venter på reset',
   };
 }
 

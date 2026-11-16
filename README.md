@@ -163,7 +163,7 @@ Knapperne "Beskeder" og "Lyd" øverst er slået fra, indtil du selv slår dem ti
 | Arbejder | Agenten skriver til terminalen lige nu |
 | Venter på xxxx | Ingen ny tekst i `idleSeconds` sekunder, men der kører subagenter, tests, emulator, build m.m. |
 | Venter på dig | Agenten venter på dit svar eller din godkendelse (også selv om der samtidig kører en baggrundsopgave) |
-| Quota used – waiting for reset | Agenten har ramt sin kvotegrænse (fx `"Individual quota reached. Please upgrade your subscription to increase your limits. Resets..."`) og venter på nulstilling |
+| Limit reached – venter på reset | Agenten har ramt sin kvotegrænse (fx `"Individual quota reached. Please upgrade your subscription to increase your limits. Resets..."`) og venter på nulstilling |
 | Færdig | Agenten er stadig åben ved prompten, men har afsluttet opgaven uden spørgsmål |
 | Åben | En almindelig terminal |
 | Afsluttet / Fejlet | Sessionen er slut (fejlet = sluttede med en fejlkode) |

@@ -64,7 +64,7 @@
   const STATUS = {
     arbejder: { label: 'Arbejder', cls: 'work', glyph: '●' },
     afventer: { label: 'Venter på andet', cls: 'extwait', glyph: '◷' },
-    kvote: { label: 'Quota used – waiting for reset', cls: 'quota', glyph: '◴' },
+    kvote: { label: 'Limit reached – venter på reset', cls: 'quota', glyph: '◴' },
     venter: { label: 'Venter på dig', cls: 'wait', glyph: '◐' },
     faerdig: { label: 'Færdig', cls: 'ready', glyph: '✓' },
     aaben: { label: 'Åben', cls: 'open', glyph: '▪' },
@@ -151,13 +151,13 @@
     if (s.briefPending && s.exitCode == null) return `Starter op – opgaven som ${s.role ? s.role.name : 'rolle'} bliver indsat, når agenten er klar.`;
     // En tekst du selv har indsat, er ikke noget agenten har sagt.
     if (s.pendingPaste && s.exitCode == null) return 'Der ligger en indsat tekst klar – tryk Enter i terminalen for at sende den.';
-    if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Quota used – waiting for reset';
+    if (s.status === 'kvote') return s.waitingDetail || s.lastLine || 'Limit reached – venter på reset';
     // Et spørgsmål om godkendelse er det vigtigste at vise – ikke en tilfældig linje fra menuen.
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
     if (s.lastLine) return s.lastLine;
     if (s.status === 'afventer') return s.waitingDetail || (s.waitingFor ? `Venter på ${s.waitingFor}` : 'Venter på baggrundsarbejde');
     if (s.status === 'venter' && s.needsApproval) return 'Mangler din godkendelse';
-    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', kvote: 'Quota used – waiting for reset', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
+    return { arbejder: 'Går i gang…', venter: 'Venter på dit svar', kvote: 'Limit reached – venter på reset', faerdig: 'Færdig med opgaven', afsluttet: 'Færdig', fejlet: 'Stoppede med en fejl' }[s.status] || '';
   }
   // ---------- resumé ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -544,7 +544,7 @@
       '{a} venter på et ja eller nej fra dig i {r}.',
     ],
     kvote: [
-      '{a} i {r}: Quota used – waiting for reset.',
+      '{a} i {r}: Limit reached – venter på reset.',
       '{a} har brugt sin kvote i {r} og venter på reset.',
       '{a} i {r} har ramt kvotegrænsen – venter på reset.',
     ],
@@ -575,7 +575,7 @@
     ],
     titleWait: ['Hallo? En agent venter', 'Nogen rækker hånden op', 'Du bliver savnet', 'Agenten tripper'],
     titleWaitMany: ['agenter venter – de er begyndt at snakke om dig', 'agenter står i kø', 'agenter tripper'],
-    titleQuota: ['Quota used – waiting for reset'],
+    titleQuota: ['Limit reached – venter på reset'],
     titleQuotaMany: ['agenter venter på quota reset'],
     titleReady: ['En agent er færdig', 'Opgave løst – klar til tjek'],
     titleReadyMany: ['agenter er færdige – klar til tjek'],
@@ -659,7 +659,7 @@
     if (prefs.notify && canNotify() && Notification.permission === 'granted') {
       try {
         const title = kind === 'fejlet' ? 'En agent er gået ned'
-          : kind === 'kvote' ? 'Quota used – waiting for reset'
+          : kind === 'kvote' ? 'Limit reached – venter på reset'
           : kind === 'venter' ? (s.needsApproval ? 'En agent mangler godkendelse' : 'En agent venter på dig')
           : 'En agent er færdig';
         const n = new Notification(title, { body: text, tag: `ct-${s.id}` });
@@ -1014,7 +1014,7 @@
     }
     if (quota.length) {
       return h('div', { class: 'next quota' }, h('div', {},
-        h('p', { class: 'nexttitle', text: quota.length === 1 ? 'Quota used – waiting for reset' : `${quota.length} agenter: Quota used – waiting for reset` }),
+        h('p', { class: 'nexttitle', text: quota.length === 1 ? 'Limit reached – venter på reset' : `${quota.length} agenter: Limit reached – venter på reset` }),
         h('p', { class: 'nextsub', text: `${quota[0].name} i ${quota[0].repo}${quota[0].waitingDetail ? ` – ${quota[0].waitingDetail}` : ''}.` })),
       jump(quota[0], 'Se status', false));
     }
@@ -2081,7 +2081,10 @@
     if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« / »Færdig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
     // Knapper der kun giver mening mens agenten kører, vises ikke bagefter.
     const ask = $('askbox');
-    if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé')] : []));
+    if (ask) ask.replaceChildren(...(s.kind === 'agent' && s.exitCode == null ? [
+      h('button', { type: 'button', class: 'btn small', id: 'compactbtn', title: 'Kør /compact i agenten for at komprimere konteksten', onclick: () => runCompact(s.id) }, '/compact'),
+      h('button', { type: 'button', class: 'btn small', id: 'askresume', onclick: () => askSummary(s.id) }, 'Bed om resumé'),
+    ] : []));
     if (hadFocus) { const b = box.querySelector('button'); if (b) b.focus(); }
   }
 
@@ -2204,7 +2207,7 @@
         h('span', { id: 'termstatus', class: 'termstatus' }, termStatus(s)),
         h('span', { class: 'hint', id: 'termhint' }),
         splitPicker(s, splitSession),
-        h('span', { id: 'askbox' }),
+        h('span', { id: 'askbox', class: 'termbuttons' }),
         h('span', { id: 'termbuttons', class: 'termbuttons' })),
       s.kind === 'agent' ? h('details', { class: 'sumbox', id: 'sumdetails', 'data-status': s.status, open: !splitSession && s.status !== 'arbejder' && s.status !== 'afventer' },
         h('summary', { text: 'Resumé: hvad er der sket siden start' }),
@@ -2326,16 +2329,29 @@
     }
   }
 
-  async function askSummary(id) {
+  async function sendAgentCommand(id, text, { submit = false, message } = {}) {
     try {
-      await api(`/api/sessions/${id}/paste`, { method: 'POST', body: { text: 'Giv mig et kort resumé på dansk af, hvad du har lavet i denne session: hvilke filer du har ændret og hvorfor, hvad du har testet, og hvad der mangler eller er usikkert.' } });
-      toast('Spørgsmålet er indsat hos agenten. Tryk Enter for at sende.');
+      await api(`/api/sessions/${id}/paste`, { method: 'POST', body: { text } });
+      if (submit) {
+        await new Promise((r) => setTimeout(r, 80));
+        await api(`/api/sessions/${id}/approve`, { method: 'POST', body: { key: 'enter' } });
+      }
+      toast(message);
       const t = state.terms.get(id);
       if (t) t.term.focus();
     } catch (err) {
       toast(err.data && err.data.pending ? 'Der ligger allerede en usendt tekst hos agenten. Send den med Enter, eller slet den (Ctrl+U), og prøv igen.' : err.message, true);
     }
   }
+
+  const askSummary = (id) => sendAgentCommand(id, 'Giv mig et kort resumé på dansk af, hvad du har lavet i denne session: hvilke filer du har ændret og hvorfor, hvad du har testet, og hvad der mangler eller er usikkert.', {
+    message: 'Spørgsmålet er indsat hos agenten. Tryk Enter for at sende.',
+  });
+
+  const runCompact = (id) => sendAgentCommand(id, '/compact', {
+    submit: true,
+    message: '/compact sendt til agenten.',
+  });
 
   async function start(kind, agentId, repoName, roleId, input) {
     const repo = repoName || state.repo;
