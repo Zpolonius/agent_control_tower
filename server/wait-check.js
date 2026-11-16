@@ -34,8 +34,8 @@ const CHOICE_RE = /^(?:(?:[❯>›▸►●•*]\s*)?(?:1[.)]|\[1\])\s*(?:yes|al
 const BARE_PROMPT_RE = /^(?:[>❯›$#]\s*$|[>❯›]\s+(?:type your message\b|ask (?:codex|claude|gemini|anything)\b|try\s+"[^"]*"\s*$))/i;
 const BG_STATUS_LINE_RE = /^(?:\d+\s+(?:background\s+(?:tasks?|shells?|agents?)|agents?|shells?)\b.*\b(?:running|↓|view|ctrl\+|esc|background)\b|working\s*\(\d+)/i;
 const BG_SPINNER_RE = /\b(?:background|baggrund|sub-?agents?)\b/i;
-const ACTIVE_SUBAGENT_LINE_RE = /^(?:[•●⏺]\s*)?(?:Task|Agent)\([^)]+\)\s*·\s*(?!.*\b(?:done|completed|finished|failed|cancelled|canceled)\b).+\s*·\s*(?:\d+[hms]\s*)+$/i;
-const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagent\(s\)/i;
+const ACTIVE_SUBAGENT_LINE_RE = /^(?:[•●⏺]\s*)?(?:Task|Agent)\([^)]+\)\s*·\s*(?!.*\b(?:done|completed|finished|failed|cancelled|canceled)\b).+\s*·\s*\d+[hms](?:\s*\d+[hms]?)*$/i;
+const SUBAGENT_FOOTER_RE = /\b[1-9]\d*\s+subagents?\b|\b[1-9]\d*\s+subagent\(s\)?/i;
 const isActiveSubagentLine = (l) => ACTIVE_SUBAGENT_LINE_RE.test(l)
   || SUBAGENT_FOOTER_RE.test(l)
   || /\b(?:Task|Agent)\([^)]*\).{0,40}(?:running|waiting|pending|…|\.\.\.)/i.test(l);

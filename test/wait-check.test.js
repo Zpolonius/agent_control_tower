@@ -917,6 +917,16 @@ test('Gemini subagent: kørende subagent giver afventer (ikke færdig), og subag
   assert.equal(isTaskDone(zeroSubagents, { hadInput: true, strict: true }), true);
   assert.equal(inspectBuffer(zeroSubagents), null);
 
+  // Afklippet højrekant i smal Mission Control-visning (39m39 uden 's', 1 subagent(s uden ')')
+  const clippedMissionControl = [
+    'Udvikler-agenten arbejder nu på issue #305.',
+    '>',
+    '• Agent(self: Developer for issue 305) · gemini-3.8-flash-tiered · Testing... · 39m39',
+    '? for shortcuts   auto · Gemini 4 Hydrogen · medium · 1 subagent(s',
+  ].join('\r\n');
+  assert.equal(isTaskDone(clippedMissionControl, { hadInput: true, strict: true }), false);
+  assert.equal(inspectBuffer(clippedMissionControl).waitingFor, 'subagenter');
+
   // Subagent der kræver godkendelse i Gemini (ctrl+k approve · alt+j manage)
   const subagentApproval = [
     'self needs approval for Bash',
