@@ -1800,30 +1800,46 @@
     if (!still()) return;
     if (!pr.available) { panel.replaceChildren(back, h('p', { class: 'alert', role: 'alert', text: pr.reason })); return; }
     const STATE = { APPROVED: 'godkendt', CHANGES_REQUESTED: 'ændringer ønsket', COMMENTED: 'kommentar', DISMISSED: 'afvist' };
-    const items = [
-      ...(pr.reviews || []).map((r) => ({
-        kind: 'Review',
-        author: r.author,
-        state: STATE[r.state] || r.state || '',
-        rawState: r.state,
-        body: r.body || '',
-        at: r.at,
-      })),
-      ...(pr.inline || []).map((c) => ({
+    const byTime = (a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0);
+    const hasBody = (it) => !!(it.body && it.body.trim());
+    // Kodekommentarer (og deres forslag) samles under det review, de blev afgivet i.
+    const reviewItems = (pr.reviews || []).map((r) => ({
+      kind: 'Review',
+      id: r.id,
+      author: r.author,
+      state: STATE[r.state] || r.state || '',
+      rawState: r.state,
+      body: r.body || '',
+      at: r.at,
+      children: [],
+    }));
+    const reviewById = new Map(reviewItems.filter((r) => r.id != null).map((r) => [r.id, r]));
+    const looseInline = [];
+    for (const c of pr.inline || []) {
+      const it = {
         kind: 'Kommentar i koden',
         author: c.author,
         where: c.line ? `${c.path}:${c.line}` : c.path,
         diffHunk: c.diffHunk || '',
         body: c.body || '',
         at: c.at,
-      })),
+      };
+      if (!hasBody(it)) continue;
+      const parent = c.reviewId != null ? reviewById.get(c.reviewId) : null;
+      (parent ? parent.children : looseInline).push(it);
+    }
+    for (const r of reviewItems) r.children.sort(byTime);
+    const items = [
+      ...reviewItems.filter((r) => hasBody(r) || r.rawState !== 'COMMENTED' || r.children.length),
+      ...looseInline,
       ...(pr.comments || []).map((c) => ({
         kind: 'Kommentar',
         author: c.author,
         body: c.body || '',
         at: c.at,
-      })),
-    ].filter((it) => (it.body && it.body.trim()) || (it.kind === 'Review' && it.rawState !== 'COMMENTED'));
+      })).filter(hasBody),
+    ].sort((a, b) => byTime(b, a)); // nyeste først
+    const itemCount = items.reduce((n, it) => n + 1 + (it.children ? it.children.length : 0), 0);
 
     const targetCtrl = sendTargetControls(repo, rolesData && rolesData.roles, 'pr');
     const dec = DECISION[pr.decision];
@@ -1850,7 +1866,7 @@
 
     // Checkboxes og review-composer
     const commitCheckboxes = [];
-    const itemCheckboxes = [];
+    const itemChecks = [];
 
     const commitList = (pr.commits && pr.commits.length)
       ? h('div', { class: 'prcommits' },
@@ -1880,7 +1896,7 @@
       disabled: true,
       onclick: () => {
         const selectedCommits = (pr.commits || []).filter((_, i) => commitCheckboxes[i] && commitCheckboxes[i].checked);
-        const selectedItems = items.filter((_, i) => itemCheckboxes[i] && itemCheckboxes[i].checked);
+        const selectedItems = itemChecks.filter((x) => x.cb.checked).map((x) => x.it);
         sendToAgent(prompt(pr, {
           commits: selectedCommits,
           items: selectedItems,
@@ -1889,7 +1905,7 @@
       },
     }, 'Send review til agent');
 
-    const totalCheckboxes = () => commitCheckboxes.concat(itemCheckboxes);
+    const totalCheckboxes = () => commitCheckboxes.concat(itemChecks.map((x) => x.cb));
 
     const toggleAllBtn = h('button', {
       type: 'button',
@@ -1937,26 +1953,40 @@
       ),
     );
 
+    const itemView = (it) => {
+      const childCbs = [];
+      const cb = h('input', { type: 'checkbox', onchange: () => {
+        for (const c of childCbs) c.checked = cb.checked;
+        updateComposer();
+      } });
+      itemChecks.push({ cb, it });
+      const children = it.children && it.children.length
+        ? h('ul', { class: 'reviews nested' }, it.children.map((child) => {
+            const li = itemView(child);
+            childCbs.push(itemChecks[itemChecks.length - 1].cb);
+            return li;
+          }))
+        : null;
+      return h('li', { class: 'review' },
+        h('div', { class: 'reviewhead' },
+          h('label', {},
+            cb,
+            h('strong', { text: `@${it.author}` }),
+            ` · ${it.kind}${it.state ? ` · ${it.state}` : ''}${it.at ? ` · ${ago(Date.parse(it.at))}` : ''}`,
+          ),
+          h('button', { type: 'button', class: 'btn small', onclick: () => sendToAgent(prompt(pr, [it, ...(it.children || [])]), null, targetCtrl.getOpts()) }, 'Send til agent'),
+        ),
+        it.where ? h('p', { class: 'where', text: it.where }) : null,
+        it.diffHunk ? h('pre', { class: 'diffhunk' }, h('code', { text: it.diffHunk })) : null,
+        it.body && it.body.trim()
+          ? window.renderMarkdown(it.body)
+          : h('p', { class: 'empty', text: it.state ? `(${it.state} uden kommentar)` : 'Ingen kommentar.' }),
+        children,
+      );
+    };
+
     const reviewsList = items.length
-      ? h('ul', { class: 'reviews' }, items.map((it) => {
-          const cb = h('input', { type: 'checkbox', onchange: updateComposer });
-          itemCheckboxes.push(cb);
-          return h('li', { class: 'review' },
-            h('div', { class: 'reviewhead' },
-              h('label', {},
-                cb,
-                h('strong', { text: `@${it.author}` }),
-                ` · ${it.kind}${it.state ? ` · ${it.state}` : ''}${it.at ? ` · ${ago(Date.parse(it.at))}` : ''}`,
-              ),
-              h('button', { type: 'button', class: 'btn small', onclick: () => sendToAgent(prompt(pr, [it]), null, targetCtrl.getOpts()) }, 'Send til agent'),
-            ),
-            it.where ? h('p', { class: 'where', text: it.where }) : null,
-            it.diffHunk ? h('pre', { class: 'diffhunk' }, h('code', { text: it.diffHunk })) : null,
-            it.body && it.body.trim()
-              ? window.renderMarkdown(it.body)
-              : h('p', { class: 'empty', text: it.state ? `(${it.state} uden kommentar)` : 'Ingen kommentar.' }),
-          );
-        }))
+      ? h('ul', { class: 'reviews' }, items.map(itemView))
       : h('p', { class: 'empty', text: 'Der er ingen reviews eller kommentarer på denne pull request endnu.' });
 
     updateComposer();
@@ -1983,7 +2013,7 @@
       commitList,
       composerBox,
       pr.inlineMissing ? h('p', { class: 'hint', text: 'Kommentarer på enkelte kodelinjer kunne ikke hentes.' }) : null,
-      h('h4', { class: 'subhead', text: items.length ? `Reviews og kommentarer (${items.length})` : 'Reviews og kommentarer' }),
+      h('h4', { class: 'subhead', text: itemCount ? `Reviews og kommentarer (${itemCount})` : 'Reviews og kommentarer' }),
       reviewsList,
     ].filter(Boolean));
   }

@@ -65,13 +65,19 @@ function createGithub(deps) {
 
   async function detail(cwd, number) {
     const n = String(number);
-    const [view, inline] = await Promise.all([
+    const [view, inline, rest] = await Promise.all([
       runner(cwd, ['pr', 'view', n, '--json', 'number,title,url,headRefName,baseRefName,reviewDecision,isDraft,state,body,additions,deletions,changedFiles,statusCheckRollup,commits,reviews,comments']),
       runner(cwd, ['api', `repos/{owner}/{repo}/pulls/${n}/comments`, '--paginate']),
+      runner(cwd, ['api', `repos/{owner}/{repo}/pulls/${n}/reviews`, '--paginate']),
     ]);
     const pr = view.ok ? parse(view.out) : null;
     if (!pr) return { available: false, reason: view.reason || 'Uventet svar fra GitHub' };
     const inl = inline.ok ? parse(inline.out) : null;
+    // gh pr view giver reviews med GraphQL-id, mens kodekommentarer peger på REST-id'et – oversæt, så de kan samles.
+    const restReviews = rest.ok ? parse(rest.out) : null;
+    const reviewIds = new Map((Array.isArray(restReviews) ? restReviews : [])
+      .filter((r) => r && typeof r.node_id === 'string' && Number.isInteger(r.id)).map((r) => [r.node_id, r.id]));
+    const inlineReviewIds = new Set((Array.isArray(inl) ? inl : []).map((c) => c && c.pull_request_review_id).filter(Number.isInteger));
     return {
       available: true,
       number: Number(pr.number), title: str(pr.title, 300), url: str(pr.url, 500),
@@ -89,10 +95,11 @@ function createGithub(deps) {
         author: commitAuthor(c),
         at: commitAt(c),
       })),
-      reviews: (pr.reviews || []).map((r) => ({ author: login(r.author), state: str(r.state, 40), body: str(r.body, 20000), at: str(r.submittedAt, 40) }))
-        .filter((r) => (r.body && r.body.trim()) || r.state !== 'COMMENTED'),
+      reviews: (pr.reviews || []).map((r) => ({ id: reviewIds.get(r.id) ?? null, author: login(r.author), state: str(r.state, 40), body: str(r.body, 20000), at: str(r.submittedAt, 40) }))
+        .filter((r) => (r.body && r.body.trim()) || r.state !== 'COMMENTED' || inlineReviewIds.has(r.id)),
       comments: (pr.comments || []).map((c) => ({ author: login(c.author), body: str(c.body, 20000), at: str(c.createdAt, 40) })),
       inline: Array.isArray(inl) ? inl.map((c) => ({ author: login(c.user), path: str(c.path, 500),
+        reviewId: Number.isInteger(c.pull_request_review_id) ? c.pull_request_review_id : null,
         line: Number.isInteger(c.line) ? c.line : (Number.isInteger(c.original_line) ? c.original_line : null),
         diffHunk: str(c.diff_hunk ?? c.diffHunk, 10000),
         body: str(c.body, 20000), at: str(c.created_at, 40) })) : [],
