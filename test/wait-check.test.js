@@ -944,6 +944,31 @@ test('Gemini subagent: kørende subagent giver afventer (ikke færdig), og subag
   assert.equal(inspectBuffer(subagentApproval), null);
 });
 
+test('Claude Code: tur slut men baggrundsagenter kører giver afventer subagenter, ikke færdig', () => {
+  for (const footer of [
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · 1 background agent · ↓ to manage',
+    '  ? for shortcuts · 2 local agents',
+    '  2 agents running · ↓ to view',
+  ]) {
+    const screen = [
+      '● Jeg har startet to subagenter og venter på deres resultater.',
+      '✻ Worked for 42s',
+      '>',
+      footer,
+    ].join('\r\n');
+    assert.equal(isTaskDone(screen, { hadInput: true, strict: true }), false, footer);
+    assert.equal(inspectBuffer(screen).waitingFor, 'subagenter', footer);
+  }
+
+  const finished = [
+    '● Begge subagenter er færdige.',
+    '✻ Worked for 42s',
+    '>',
+    '  ? for shortcuts · 2 background agents completed',
+  ].join('\r\n');
+  assert.equal(isTaskDone(finished, { hadInput: true, strict: true }), true);
+});
+
 test('inspectQuota: genkender Claude Code 5-hour/usage limit både før tur-afslutning og efter brugerinput', () => {
   const beforeTurnDone = [
     '● Background command "Run full unit tests" completed (exit code 0)',
