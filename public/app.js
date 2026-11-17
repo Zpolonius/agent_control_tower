@@ -473,7 +473,7 @@
   // Indsætter du et nyt link i den samme fane (fx efter en genstart), læses den nye nøgle uden at siden skal genindlæses.
   // Ellers opdateres visningen, når du bruger frem/tilbage i browseren eller ændrer adressen.
   function onRouteChange() {
-    if (readToken()) { state.sig = null; refresh(true).then(renderMain); return; }
+    if (readToken()) { state.sig = null; state.locked = false; disconnectEvents(true); refresh(true).then(renderMain); return; }
     if (location.hash === lastHash) return;
     readRoute();
     $('toast').className = 'toast';
@@ -702,15 +702,100 @@
   }
 
   // ---------- data ----------
-  async function refresh(fresh) {
+  let eventsWs = null;
+  let eventsRetryTimer = null;
+  let eventsRetryCount = 0;
+  let eventsNeedsSync = false;
+
+  function disconnectEvents(resetSync) {
+    clearTimeout(eventsRetryTimer);
+    eventsRetryTimer = null;
+    if (resetSync) eventsNeedsSync = false;
+    eventsRetryCount = 0;
+    const ws = eventsWs;
+    eventsWs = null;
+    if (ws) {
+      try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch { /* allerede lukket */ }
+    }
+  }
+
+  function connectEvents() {
+    if (!token || state.locked) { disconnectEvents(true); return; }
+    if (eventsWs && (eventsWs.readyState === 0 || eventsWs.readyState === 1)) return;
+    clearTimeout(eventsRetryTimer);
+    eventsRetryTimer = null;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws/events`, ['ct', `ct.${token}`]);
+    eventsWs = ws;
+    ws.onopen = () => {
+      if (eventsWs !== ws) return;
+      eventsRetryCount = 0;
+      if (eventsNeedsSync) {
+        eventsNeedsSync = false;
+        refresh();
+      }
+    };
+    ws.onmessage = (e) => {
+      if (eventsWs !== ws) return;
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (m && m.type === 'state-changed') refresh();
+    };
+    ws.onerror = () => {
+      if (eventsWs !== ws) return;
+      try { ws.close(); } catch { /* allerede lukket */ }
+    };
+    ws.onclose = () => {
+      if (eventsWs !== ws) return;
+      eventsWs = null;
+      if (!token || state.locked) return;
+      eventsNeedsSync = true;
+      const delay = Math.min(30000, 1000 * Math.pow(2, eventsRetryCount));
+      eventsRetryCount = Math.min(eventsRetryCount + 1, 10);
+      eventsRetryTimer = setTimeout(() => {
+        eventsRetryTimer = null;
+        connectEvents();
+      }, delay);
+    };
+  }
+
+  let refreshInFlight = null;
+  let refreshQueued = null;
+
+  function refresh(fresh) {
+    if (!refreshInFlight) {
+      refreshInFlight = runRefresh(!!fresh).finally(() => {
+        refreshInFlight = null;
+        if (refreshQueued) {
+          const next = refreshQueued;
+          refreshQueued = null;
+          refresh(next.fresh).then(next.resolve, next.reject);
+        }
+      });
+      return refreshInFlight;
+    }
+    if (!refreshQueued) {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      refreshQueued = { fresh: !!fresh, promise, resolve, reject };
+    } else if (fresh) {
+      refreshQueued.fresh = true;
+    }
+    return refreshQueued.promise;
+  }
+
+  async function runRefresh(fresh) {
     try {
       state.data = await api(`/api/state${fresh ? '?fresh=1' : ''}`);
       state.offline = false;
       state.locked = false;
+      connectEvents();
     } catch (err) {
       if (err.status === 401) {
         // Forkert eller gammel nøgle: det vi viste før, gælder ikke længere.
         state.locked = true; state.offline = false; state.data = null;
+        disconnectEvents(true);
         for (const t of state.terms.values()) disposeTerm(t);
         state.terms.clear();
       } else state.offline = true;
@@ -2558,7 +2643,8 @@
   $('tokensnav').addEventListener('click', () => go(null, null, 'tokens'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
   const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
-  setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 3000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); connectEvents(); } });
+  connectEvents();
   refresh().then(() => { if (!$('tabs') && !$('dash') && !$('panel')) renderMain(); });
 })();

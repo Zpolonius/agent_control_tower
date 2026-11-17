@@ -35,8 +35,17 @@ function createApp({ config, token }) {
   const tokens = createTokens(config, {
     getRepoNames: async () => (await scanner.scan(false)).repos.map((r) => r.name),
   });
+  const eventClients = new Set();
+  function broadcastStateChange({ reason, sessionId }) {
+    if (!eventClients.size) return;
+    const payload = JSON.stringify({ type: 'state-changed', reason, sessionId });
+    for (const ws of eventClients) {
+      if (ws.readyState === 1) ws.send(payload);
+    }
+  }
   const sessions = createSessions(config, {
     onSessionEvent: (event, view) => tokens.recordSession(event, view),
+    onStateChange: broadcastStateChange,
   });
   const github = createGithub();
   const skills = createSkills(config);
@@ -298,10 +307,17 @@ function createApp({ config, token }) {
     // Alt herinde er pakket ind, så en skæv forespørgsel kun bliver afvist – den må aldrig kunne vælte hele programmet.
     try {
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
-      const ok = sec.hostOk(req, port) && sec.originOk(req, port) && sec.wsAuthed(req, token)
-        && url.pathname === '/ws' && sessions.get(url.searchParams.get('session'));
-      if (!ok) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return socket.destroy(); }
+      const authed = sec.hostOk(req, port) && sec.originOk(req, port) && sec.wsAuthed(req, token);
+      const isEvents = url.pathname === '/ws/events';
+      const sessionTarget = !isEvents && url.pathname === '/ws' ? sessions.get(url.searchParams.get('session')) : null;
+      if (!authed || (!isEvents && !sessionTarget)) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return socket.destroy(); }
       wss.handleUpgrade(req, socket, head, (ws) => {
+        if (isEvents) {
+          eventClients.add(ws);
+          ws.on('close', () => eventClients.delete(ws));
+          ws.on('error', () => eventClients.delete(ws));
+          return;
+        }
         const sendMsg = (o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
         const client = { onData: (data) => sendMsg({ type: 'data', data }), onExit: (code) => sendMsg({ type: 'exit', code }) };
         const link = sessions.attach(url.searchParams.get('session'), client);
@@ -327,6 +343,7 @@ function createApp({ config, token }) {
   // Lukker alt ned og venter kort på, at terminalerne stopper. Dem der ikke gør, bliver tvunget – ingen må blive hængende.
   async function close() {
     sessions.closeAll();
+    eventClients.clear();
     for (const c of wss.clients) c.terminate();
     wss.close();
     const done = new Promise((resolve) => server.close(resolve));

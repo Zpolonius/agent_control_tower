@@ -67,11 +67,16 @@ function lastLine(buffer, errorsFirst) {
   return lines.length ? short(lines[lines.length - 1]) : '';
 }
 
-function createSessions(config, { waitChecker = createWaitChecker(), onSessionEvent } = {}) {
+function createSessions(config, { waitChecker = createWaitChecker(), onSessionEvent, onStateChange } = {}) {
   const sessions = new Map();
 
   const isIdleAgent = (s) => s.exitCode == null && s.kind === 'agent' && Date.now() - s.lastOutputAt >= config.idleSeconds * 1000;
   const currentWait = (s) => (isIdleAgent(s) ? waitChecker.checkSync(s) : null);
+
+  function emitStateChange(reason, sessionId) {
+    if (!onStateChange) return;
+    try { onStateChange({ reason, sessionId }); } catch { /* ignore listener errors */ }
+  }
 
   // Det der står på agentens skærm lige nu – gengivet af en usynlig terminal, så slettede og overskrevne linjer er væk.
   function screenText(s) {
@@ -172,6 +177,74 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     };
   }
 
+  function stateSnapshot(s) {
+    const st = status(s);
+    const approval = st === 'venter' && s.approvalSince != null;
+    const quota = st === 'kvote' ? inspectQuota(s.screenText(), SCREEN_QUOTA) : null;
+    const wait = st === 'afventer' ? currentWait(s) : null;
+    const waitingFor = quota ? quota.waitingFor : (wait ? wait.waitingFor : null);
+    const waitingDetail = quota ? quota.detail : (wait ? wait.detail : null);
+    const approvalKey = approval && s.prompt ? s.prompt.key || null : null;
+    return {
+      st,
+      approval,
+      sig: JSON.stringify([st, s.exitCode, !!s.killed, approval, approvalKey, waitingFor, waitingDetail, s.pendingPaste, !!s.pendingBrief]),
+    };
+  }
+
+  function checkStateChange(s, explicitReason) {
+    if (!sessions.has(s.id)) return false;
+    const prev = s.lastSnap;
+    const next = stateSnapshot(s);
+    if (prev && prev.sig === next.sig) return false;
+    s.lastSnap = next;
+    let reason = explicitReason;
+    if (!reason) {
+      if (next.st === 'kvote' && (!prev || prev.st !== 'kvote')) reason = 'quota';
+      else if (prev && next.approval !== prev.approval) reason = 'approval';
+      else reason = 'status';
+    }
+    emitStateChange(reason, s.id);
+    return true;
+  }
+
+  function scheduleSettle(s) {
+    clearTimeout(s.settleTimer);
+    s.settleTimer = null;
+    if (s.exitCode != null || s.kind !== 'agent' || !s.approvalOpen || s.approvalSince == null) return;
+    const settleMs = Math.min(1500, Math.max(200, config.idleSeconds * 500));
+    const waitMs = settleMs - (Date.now() - s.approvalSince);
+    if (waitMs <= 0) return;
+    s.settleTimer = setTimeout(() => {
+      s.settleTimer = null;
+      if (s.exitCode != null || !sessions.has(s.id)) return;
+      checkStateChange(s);
+    }, waitMs + 15);
+    s.settleTimer.unref();
+  }
+
+  function scheduleIdle(s) {
+    clearTimeout(s.idleTimer);
+    s.idleTimer = null;
+    if (s.exitCode != null || s.kind !== 'agent') return;
+    const idleMs = Math.max(0, config.idleSeconds * 1000);
+    const remaining = idleMs - (Date.now() - s.lastOutputAt);
+    s.idleTimer = setTimeout(() => {
+      s.idleTimer = null;
+      if (s.exitCode != null || !sessions.has(s.id)) return;
+      const left = idleMs - (Date.now() - s.lastOutputAt);
+      if (left > 0) { scheduleIdle(s); return; }
+      s.lastKnownIdle = true;
+      checkStateChange(s);
+      if (isIdleAgent(s)) {
+        waitChecker.checkAll([s])
+          .then(() => { if (s.exitCode == null && sessions.has(s.id)) checkStateChange(s); })
+          .catch(() => {});
+      }
+    }, Math.max(10, remaining + 20));
+    s.idleTimer.unref();
+  }
+
   async function refreshWaits() {
     for (const s of sessions.values()) updateApprovalState(s);
     const idle = [...sessions.values()].filter(isIdleAgent);
@@ -208,11 +281,16 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       startedAt: now, lastOutputAt: now, lastInputAt: 0, lastResizeAt: 0, cols: 100, rows: 30, endedAt: null,
       exitCode: null, killed: false, bracketed: false, pendingPaste: false, hadUserInput: false, waitState: null,
       queuedPaste, initialPasteTimer: null,
-      approvalSince: null, approvalOpen: false, prompt: null, lastPromptAt: 0, lastAnswerAt: 0, draft: '', sent: [], approvalTimer: null, buffer: '', clients: new Set(), proc,
+      approvalSince: null, approvalOpen: false, prompt: null, lastPromptAt: 0, lastAnswerAt: 0, draft: '', sent: [], approvalTimer: null,
+      idleTimer: null, settleTimer: null, lastKnownIdle: false, lastSnap: null,
+      buffer: '', clients: new Set(), proc,
       screen: new ScreenTerminal({ cols: 100, rows: 30, scrollback: 500, allowProposedApi: true, logLevel: 'off' }),
     };
     s.screenText = () => screenText(s);
     sessions.set(s.id, s);
+    s.lastSnap = stateSnapshot(s);
+    emitStateChange('create', s.id);
+    scheduleIdle(s);
     proc.onData((data) => {
       // Tegn du selv taster bliver gentaget af terminalen, og et program tegner skærmen om når vinduet ændrer størrelse.
       // Ingen af delene tæller som at agenten arbejder.
@@ -220,6 +298,13 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       if (t - s.lastInputAt > 400 && t - s.lastResizeAt > 600) {
         s.lastOutputAt = t;
         s.waitState = null;
+        if (s.kind === 'agent') {
+          scheduleIdle(s);
+          if (s.lastKnownIdle) {
+            s.lastKnownIdle = false;
+            checkStateChange(s);
+          }
+        }
       }
       s.buffer += data;
       s.screen.write(data);
@@ -259,7 +344,9 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       if (s.kind === 'agent' && !s.approvalTimer) {
         s.approvalTimer = setTimeout(() => {
           s.approvalTimer = null;
-          updateApprovalState(s);
+          if (s.exitCode != null || !sessions.has(s.id)) return;
+          checkStateChange(s);
+          if (s.approvalOpen && !needsApproval(s)) scheduleSettle(s);
         }, 350);
         s.approvalTimer.unref();
       }
@@ -267,12 +354,15 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     });
     proc.onExit(({ exitCode, signal }) => {
       clearTimeout(s.killTimer1); clearTimeout(s.killTimer2); clearTimeout(s.approvalTimer); clearTimeout(s.briefTimer); clearTimeout(s.briefFallback); clearTimeout(s.initialPasteTimer);
+      clearTimeout(s.idleTimer); clearTimeout(s.settleTimer);
       s.pendingBrief = null;
       s.approvalTimer = null; s.initialPasteTimer = null; s.queuedPaste = null;
+      s.idleTimer = null; s.settleTimer = null;
       // Blev processen slået ned af et signal (nedbrud, kill -9), og var det ikke os selv, er det en fejl – ikke "afsluttet".
       s.exitCode = signal && !s.killed ? 128 + signal : (exitCode ?? 0);
       s.endedAt = Date.now();
       if (s.kind === 'agent' && onSessionEvent) onSessionEvent('exit', view(s));
+      checkStateChange(s, 'exit');
       for (const c of s.clients) c.onExit(s.exitCode);
     });
     // Siger agenten slet ingenting efter start, indsættes beskrivelsen alligevel efter et stykke tid.
@@ -300,11 +390,13 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       write(data) {
         if (s.exitCode != null) return;
         s.lastInputAt = Date.now();
+        let resetIdle = false;
         if (/[\r\n]/.test(data)) {
           s.hadUserInput = true;
           // Du har sendt noget: agenten går i gang nu, også selvom dens første svar kommer samtidig med ekkoet.
           s.lastOutputAt = Date.now();
           s.waitState = null;
+          resetIdle = true;
         }
         // Det du er ved at skrive, huskes, så "> ja" i feltet ikke forveksles med et spørgsmål fra agenten.
         if (/[\r\n]/.test(data)) {
@@ -320,11 +412,17 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
         if (s.kind === 'agent' && ANSWER_RE.test(data)) {
           s.lastAnswerAt = Date.now();
           // Har du lige svaret på et spørgsmål, går agenten i gang nu – også selvom svaret var et tal uden Enter.
-          if (s.approvalOpen) { s.lastOutputAt = Date.now(); s.waitState = null; }
+          if (s.approvalOpen) { s.lastOutputAt = Date.now(); s.waitState = null; resetIdle = true; }
           s.approvalSince = null;
           s.approvalOpen = false;
+          clearTimeout(s.settleTimer); s.settleTimer = null;
+        }
+        if (resetIdle && s.kind === 'agent') {
+          s.lastKnownIdle = false;
+          scheduleIdle(s);
         }
         s.proc.write(data);
+        checkStateChange(s);
       },
       resize(cols, rows) {
         if (s.exitCode != null || (cols === s.cols && rows === s.rows)) return;
@@ -363,6 +461,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     s.lastInputAt = Date.now();
     // Uden indsæt-tilstand ville et linjeskift betyde "send", så dér laves teksten om til én linje.
     s.proc.write(bracketed ? `\x1b[200~${safe.replace(/\n/g, '\r')}\x1b[201~` : safe.replace(/\s*\n\s*/g, ' '));
+    checkStateChange(s, 'paste');
     return 'ok';
   }
 
@@ -383,7 +482,11 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     s.approvalSince = null;
     s.approvalOpen = false;
     s.draft = '';
+    s.lastKnownIdle = false;
+    clearTimeout(s.settleTimer); s.settleTimer = null;
+    scheduleIdle(s);
     s.proc.write(KEYS[key]);
+    checkStateChange(s, 'approve');
     return 'ok';
   }
 
@@ -401,7 +504,9 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   function kill(s) {
     if (s.exitCode != null) return;
     clearTimeout(s.initialPasteTimer);
+    clearTimeout(s.settleTimer);
     s.initialPasteTimer = null;
+    s.settleTimer = null;
     s.queuedPaste = null;
     s.killed = true;
     signal(s, 'SIGHUP');
@@ -414,7 +519,16 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   function remove(id) {
     const s = get(id);
     if (!s) return false;
-    if (s.exitCode == null) kill(s); else { sessions.delete(id); try { s.screen.dispose(); } catch { /* allerede lukket */ } }
+    if (s.exitCode == null) {
+      kill(s);
+      checkStateChange(s, 'remove');
+    } else {
+      clearTimeout(s.idleTimer); clearTimeout(s.settleTimer);
+      s.idleTimer = null; s.settleTimer = null;
+      sessions.delete(id);
+      try { s.screen.dispose(); } catch { /* allerede lukket */ }
+      emitStateChange('remove', id);
+    }
     return true;
   }
 
