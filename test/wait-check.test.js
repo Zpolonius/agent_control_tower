@@ -1005,3 +1005,17 @@ test('inspectQuota: genkender Claude Code 5-hour/usage limit både før tur-afsl
   assert.ok(q3, 'skal genkende You\'ve hit your 5-hour limit');
   assert.equal(q3.waitingFor, 'quota reset');
 });
+
+test('inspectQuota: limit-beskeden tæller ikke længere, når agenten er gået i gang igen og har afsluttet turen', () => {
+  const resumed = [
+    '● 5-hour limit reached ∙ resets 3pm',
+    '  /upgrade to increase your usage limit.',
+    '│ > go │',
+    '  ? for shortcuts',
+    '● resumed: go',
+    '✻ Worked for 5s',
+    '│ > │',
+    '  ? for shortcuts',
+  ].join('\r\n');
+  assert.equal(inspectQuota(resumed, SCREEN_QUOTA), null);
+});
