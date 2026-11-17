@@ -26,6 +26,8 @@ const args = process.argv.slice(2);
 const cmd = args.slice(0, 2).join(' ');
 if (cmd === 'pr view') {
   process.stdout.write(JSON.stringify(data.view || {}));
+} else if (args[0] === 'api' && String(args[1]).endsWith('/reviews')) {
+  process.stdout.write(JSON.stringify(data.restReviews || []));
 } else if (args[0] === 'api') {
   process.stdout.write(data.inline === null ? 'null' : JSON.stringify(data.inline || []));
 } else if (cmd === 'pr list') {
@@ -213,6 +215,29 @@ test('github.detail: bevarer tomme APPROVED og CHANGES_REQUESTED reviews, men fi
   assert.equal(detail.reviews[2].author, 'reviewer');
   assert.equal(detail.reviews[2].state, 'COMMENTED');
   assert.equal(detail.reviews[2].body, 'Fint arbejde!');
+});
+
+test('github.detail: kodekommentarer kobles til deres review, og tomme COMMENTED-reviews med kodekommentarer bevares', async () => {
+  const gh = createGithub();
+  setMock({
+    view: {
+      number: 11,
+      title: 'Samling',
+      reviews: [
+        { id: 'PRR_a', author: { login: 'rev' }, state: 'COMMENTED', body: '', submittedAt: '2026-11-15T10:00:00Z' },
+        { id: 'PRR_b', author: { login: 'ghost' }, state: 'COMMENTED', body: '', submittedAt: '2026-11-15T11:00:00Z' },
+      ],
+    },
+    restReviews: [{ id: 501, node_id: 'PRR_a' }, { id: 502, node_id: 'PRR_b' }],
+    inline: [
+      { user: { login: 'rev' }, path: 'a.js', line: 3, body: '```suggestion\nx\n```', created_at: '2026-11-15T10:00:00Z', pull_request_review_id: 501 },
+      { user: { login: 'løs' }, path: 'b.js', line: 1, body: 'hej', created_at: '2026-11-15T12:00:00Z' },
+    ],
+  });
+
+  const detail = await gh.detail(shimDir, 11);
+  assert.deepEqual(detail.reviews.map((r) => [r.author, r.id]), [['rev', 501]]);
+  assert.deepEqual(detail.inline.map((c) => c.reviewId), [501, null]);
 });
 
 test('github.detail: håndterer manglende og null felter sikkert', async () => {
