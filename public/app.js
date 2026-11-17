@@ -20,7 +20,7 @@
   const state = {
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
     splitTerm: null, missionOnlyActive: true, missionCols: 2,
-    brainFile: {}, pr: {}, issue: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, notifiedApproval: new Map(), prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+    brainFile: {}, pr: {}, issue: {}, issuesCache: {}, prsCache: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, notifiedApproval: new Map(), prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
   };
 
   const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
@@ -1566,6 +1566,7 @@
       return;
     }
     if (!still()) return;
+    if (data && data.available) state.issuesCache[repo] = data.issues || [];
     const bar = h('div', { class: 'panelbar' }, h('h3', { text: data.available ? `Åbne issues (${data.issues.length})` : 'Åbne issues' }),
       h('button', { type: 'button', class: 'btn small', onclick: () => issuesPanel(panel, true) }, 'Hent igen'));
     if (!data.available) { panel.replaceChildren(bar, h('p', { class: 'alert', role: 'alert', text: data.reason })); return; }
@@ -1751,6 +1752,7 @@
       return;
     }
     if (!still()) return;
+    if (data && data.available) state.prsCache[repo] = data.prs || [];
     const bar = h('div', { class: 'panelbar' }, h('h3', { text: data && data.available ? `Åbne pull requests (${data.prs.length})` : 'Åbne pull requests' }),
       h('button', { type: 'button', class: 'btn small', onclick: () => prPanel(panel, true) }, 'Hent igen'));
     if (!data.available) { panel.replaceChildren(bar, h('p', { class: 'alert', role: 'alert', text: data.reason })); return; }
@@ -2158,6 +2160,8 @@
         if (tab) tab.focus();
         return false;
       }
+      if (handleGlobalShortcut(ev)) return false;
+      if (ev.type === 'keypress' && (isPaletteShortcut(ev) || isNextWaitingShortcut(ev))) return false;
       return true;
     });
     term.onResize(({ cols, rows }) => sendMsg({ type: 'resize', cols, rows }));
@@ -2645,6 +2649,364 @@
     panel.replaceChildren(...nodes);
   }
 
+  // ---------- command palette & genveje ----------
+  let paletteEl = null;
+  let paletteMatches = [];
+  let paletteIdx = 0;
+  let palettePrevFocus = null;
+
+  const paletteOpen = () => !!(paletteEl && !paletteEl.dialog.hidden);
+
+  function nextWaitingAgent() {
+    const sessions = (state.data && state.data.sessions) || [];
+    return agentsIn(sessions).find((s) => s.status === 'venter') || null;
+  }
+
+  function jumpToNextWaiting() {
+    if (paletteOpen()) closePalette(false);
+    const waiting = nextWaitingAgent();
+    if (!waiting) {
+      toast('Ingen agenter venter på dig lige nu.');
+      return;
+    }
+    go(waiting.repo, `term:${waiting.id}`);
+  }
+
+  function isPaletteShortcut(ev) {
+    if (!ev || ev.isComposing) return false;
+    return (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey
+      && typeof ev.key === 'string' && ev.key.toLowerCase() === 'k';
+  }
+
+  function isNextWaitingShortcut(ev) {
+    if (!ev || ev.isComposing) return false;
+    if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return false;
+    return (typeof ev.key === 'string' && ev.key.toLowerCase() === 'n') || ev.code === 'KeyN';
+  }
+
+  function handleGlobalShortcut(ev) {
+    if (ev.type !== 'keydown') return false;
+    if (isPaletteShortcut(ev)) {
+      ev.preventDefault();
+      if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      togglePalette();
+      return true;
+    }
+    if (isNextWaitingShortcut(ev)) {
+      ev.preventDefault();
+      if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      jumpToNextWaiting();
+      return true;
+    }
+    return false;
+  }
+
+  function buildPaletteItems() {
+    const items = [];
+    const waiting = nextWaitingAgent();
+    if (waiting) {
+      items.push({
+        group: 'Genvej',
+        title: `Svar ventende agent: ${waiting.name} i ${waiting.repo}`,
+        sub: 'Hop direkte til terminalen (Alt+N)',
+        keywords: `venter næste agent alt+n ${waiting.name} ${waiting.repo}`,
+        run: () => go(waiting.repo, `term:${waiting.id}`),
+      });
+    }
+
+    items.push(
+      { group: 'Navigation', title: 'Overblik', sub: 'Forside og samlet status', keywords: 'home dashboard overblik', run: () => go(null, 'overview') },
+      { group: 'Navigation', title: 'Mission Control', sub: 'Alle aktive terminaler', keywords: 'mission control grid terminaler', run: () => go(null, null, 'mission') },
+      { group: 'Navigation', title: 'Skills', sub: 'Personlige og repo-skills', keywords: 'skills kommandoer', run: () => go(null, null, 'skills') },
+      { group: 'Navigation', title: 'Regnskab', sub: 'Token-regnskab og forbrug', keywords: 'regnskab tokens forbrug', run: () => go(null, null, 'tokens') },
+    );
+
+    if (!state.data) return items;
+    const repos = sortRepos(state.data.repos || []);
+    const agents = state.data.agents || [];
+    const activeRepo = state.repo && repos.some((r) => r.name === state.repo) ? state.repo : null;
+
+    const addRepoActions = (repoName, isCurrent) => {
+      const boost = isCurrent ? 5 : 0;
+      for (const a of agents) {
+        items.push({
+          group: 'Start agent',
+          title: `Start ${a.name} i ${repoName}`,
+          sub: isCurrent ? 'Valgt repo' : 'Åbn ny session',
+          keywords: `start agent ${a.id} ${a.name} ${repoName}`,
+          boost,
+          run: () => start('agent', a.id, repoName),
+        });
+      }
+      items.push(
+        {
+          group: 'GitHub',
+          title: `Issues i ${repoName}`,
+          sub: 'Åbn liste over åbne issues',
+          keywords: `issues github ${repoName}`,
+          boost,
+          run: () => { delete state.issue[repoName]; go(repoName, 'issues'); },
+        },
+        {
+          group: 'GitHub',
+          title: `Pull requests i ${repoName}`,
+          sub: 'Åbn liste over åbne PRs',
+          keywords: `pull requests prs github ${repoName}`,
+          boost,
+          run: () => { delete state.pr[repoName]; go(repoName, 'prs'); },
+        },
+      );
+    };
+
+    if (activeRepo) addRepoActions(activeRepo, true);
+
+    for (const r of repos) {
+      const n = r.changed + r.untracked;
+      items.push({
+        group: 'Repo',
+        title: `Skift til ${r.name}`,
+        sub: `${branchText(r)}${n ? ` · ${n} ændr.` : ''}`,
+        keywords: `repo skift ${r.name} ${r.branch || ''}`,
+        exactKey: r.name.toLowerCase(),
+        run: () => go(r.name, 'overview'),
+      });
+    }
+
+    for (const r of repos) {
+      if (r.name !== activeRepo) addRepoActions(r.name, false);
+    }
+
+    for (const [repoName, list] of Object.entries(state.issuesCache || {})) {
+      for (const iss of list) {
+        items.push({
+          group: 'Issue',
+          title: `Issue #${iss.number}: ${iss.title}`,
+          sub: `${repoName}${iss.author ? ` · @${iss.author}` : ''}`,
+          keywords: `issue #${iss.number} ${iss.number} ${iss.title} ${repoName} ${(iss.labels || []).join(' ')}`,
+          boost: repoName === activeRepo ? 5 : 0,
+          run: () => { state.issue[repoName] = iss.number; go(repoName, 'issues'); },
+        });
+      }
+    }
+
+    for (const [repoName, list] of Object.entries(state.prsCache || {})) {
+      for (const pr of list) {
+        items.push({
+          group: 'Pull request',
+          title: `PR #${pr.number}: ${pr.title}`,
+          sub: `${repoName}${pr.branch ? ` · ${pr.branch}` : ''}`,
+          keywords: `pr pull request #${pr.number} ${pr.number} ${pr.title} ${pr.branch || ''} ${repoName}`,
+          boost: repoName === activeRepo ? 5 : 0,
+          run: () => { state.pr[repoName] = pr.number; go(repoName, 'prs'); },
+        });
+      }
+    }
+
+    return items;
+  }
+
+  function filterPaletteItems(items, query) {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return items.slice(0, 60);
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const scored = [];
+    items.forEach((item, index) => {
+      const titleL = item.title.toLowerCase();
+      const hay = `${titleL} ${(item.sub || '').toLowerCase()} ${(item.keywords || '').toLowerCase()}`;
+      if (!tokens.every((t) => hay.includes(t))) return;
+      let score = item.boost || 0;
+      if (item.exactKey === q) score += 120;
+      else if (item.exactKey && item.exactKey.startsWith(q)) score += 80;
+      if (titleL.startsWith(q)) score += 100;
+      else if (titleL.includes(q)) score += 50;
+      for (const t of tokens) if (titleL.includes(t)) score += 15;
+      scored.push({ item, score, index });
+    });
+    scored.sort((a, b) => b.score - a.score || a.index - b.index);
+    return scored.slice(0, 60).map((s) => s.item);
+  }
+
+  function updatePaletteSelection() {
+    if (!paletteEl) return;
+    const opts = paletteEl.list.querySelectorAll('[role="option"]');
+    opts.forEach((opt, i) => {
+      const active = i === paletteIdx;
+      opt.classList.toggle('active', active);
+      opt.setAttribute('aria-selected', String(active));
+    });
+    const activeEl = opts[paletteIdx];
+    if (activeEl) {
+      paletteEl.input.setAttribute('aria-activedescendant', activeEl.id);
+      if (typeof activeEl.scrollIntoView === 'function') activeEl.scrollIntoView({ block: 'nearest' });
+    } else {
+      paletteEl.input.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function executePaletteItem(idx) {
+    const item = paletteMatches[idx];
+    if (!item) return;
+    closePalette(false);
+    item.run();
+  }
+
+  function renderPaletteList() {
+    if (!paletteEl) return;
+    paletteMatches = filterPaletteItems(buildPaletteItems(), paletteEl.input.value);
+    if (paletteIdx >= paletteMatches.length) paletteIdx = 0;
+    if (!paletteMatches.length) {
+      paletteEl.input.removeAttribute('aria-activedescendant');
+      paletteEl.list.replaceChildren(h('li', { class: 'palette-empty', role: 'presentation', text: 'Ingen resultater matcher søgningen.' }));
+      return;
+    }
+    paletteEl.list.replaceChildren(...paletteMatches.map((item, i) => h('li', { role: 'none' },
+      h('button', {
+        type: 'button',
+        id: `palette-opt-${i}`,
+        role: 'option',
+        tabindex: '-1',
+        class: `palette-item${i === paletteIdx ? ' active' : ''}`,
+        'aria-selected': String(i === paletteIdx),
+        onclick: () => executePaletteItem(i),
+      },
+      h('span', { class: 'palette-group', text: item.group }),
+      h('span', { class: 'palette-main' },
+        h('span', { class: 'palette-title', text: item.title }),
+        item.sub ? h('span', { class: 'palette-sub', text: item.sub }) : null)))));
+    updatePaletteSelection();
+  }
+
+  function prefetchPaletteGitHub() {
+    const repo = state.repo;
+    if (!repo || !state.data || !state.data.repos.some((r) => r.name === repo)) return;
+    const tasks = [];
+    if (!(repo in state.issuesCache)) {
+      tasks.push(api(`/api/issues?repo=${encodeURIComponent(repo)}`).then((d) => {
+        if (d && d.available) state.issuesCache[repo] = d.issues || [];
+      }).catch(() => null));
+    }
+    if (!(repo in state.prsCache)) {
+      tasks.push(api(`/api/prs?repo=${encodeURIComponent(repo)}`).then((d) => {
+        if (d && d.available) state.prsCache[repo] = d.prs || [];
+      }).catch(() => null));
+    }
+    if (tasks.length) Promise.all(tasks).then(() => { if (paletteOpen()) renderPaletteList(); });
+  }
+
+  function ensurePalette() {
+    if (paletteEl) return paletteEl;
+    const input = h('input', {
+      id: 'palette-input',
+      class: 'palette-input',
+      type: 'search',
+      role: 'combobox',
+      'aria-expanded': 'true',
+      'aria-controls': 'palette-list',
+      'aria-autocomplete': 'list',
+      placeholder: 'Søg efter repo, agent, issue, PR eller side…',
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    const closeBtn = h('button', {
+      type: 'button',
+      class: 'btn small ghost palette-close',
+      'aria-label': 'Luk kommandopalette',
+      onclick: () => closePalette(true),
+    }, 'Esc');
+    const list = h('ul', { id: 'palette-list', class: 'palette-list', role: 'listbox', 'aria-label': 'Handlinger' });
+    const dialog = h('div', {
+      id: 'palette-dialog',
+      class: 'palette',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'palette-title',
+      hidden: true,
+    },
+    h('div', { class: 'palette-head' },
+      h('label', { id: 'palette-title', class: 'sr', for: 'palette-input', text: 'Kommandopalette' }),
+      input,
+      closeBtn),
+    list,
+    h('p', { class: 'palette-hint', text: '↑↓ vælg · Enter udfør · Esc luk · Alt+N næste ventende' }));
+    const backdrop = h('div', { id: 'palette-backdrop', class: 'palette-backdrop', hidden: true }, dialog);
+
+    backdrop.addEventListener('click', (ev) => {
+      if (ev.target === backdrop) closePalette(true);
+    });
+    input.addEventListener('input', () => {
+      paletteIdx = 0;
+      renderPaletteList();
+    });
+    dialog.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePalette(true);
+      } else if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        if (paletteMatches.length) {
+          paletteIdx = (paletteIdx + 1) % paletteMatches.length;
+          updatePaletteSelection();
+        }
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (paletteMatches.length) {
+          paletteIdx = (paletteIdx - 1 + paletteMatches.length) % paletteMatches.length;
+          updatePaletteSelection();
+        }
+      } else if (ev.key === 'Enter') {
+        if (paletteMatches.length) {
+          ev.preventDefault();
+          executePaletteItem(paletteIdx);
+        }
+      } else if (ev.key === 'Tab') {
+        ev.preventDefault();
+        if (document.activeElement === input) closeBtn.focus();
+        else input.focus();
+      }
+    });
+
+    document.body.append(backdrop);
+    paletteEl = { backdrop, dialog, input, closeBtn, list };
+    return paletteEl;
+  }
+
+  function restorePaletteFocus() {
+    if (palettePrevFocus && palettePrevFocus.isConnected && typeof palettePrevFocus.focus === 'function') {
+      palettePrevFocus.focus();
+      return;
+    }
+    if (state.repo && state.view && state.view.startsWith('term:')) {
+      const t = state.terms.get(state.view.slice(5));
+      if (t && t.term) t.term.focus();
+    }
+  }
+
+  function openPalette() {
+    const els = ensurePalette();
+    palettePrevFocus = document.activeElement;
+    paletteIdx = 0;
+    els.input.value = '';
+    els.backdrop.hidden = false;
+    els.dialog.hidden = false;
+    renderPaletteList();
+    els.input.focus();
+    prefetchPaletteGitHub();
+  }
+
+  function closePalette(restore = true) {
+    if (!paletteOpen()) return;
+    paletteEl.backdrop.hidden = true;
+    paletteEl.dialog.hidden = true;
+    if (restore) restorePaletteFocus();
+    palettePrevFocus = null;
+  }
+
+  function togglePalette() {
+    if (paletteOpen()) closePalette(true);
+    else openPalette();
+  }
+
   // ---------- start ----------
   $('filter').addEventListener('input', (e) => { state.filter = e.target.value; renderChrome(); if (!state.repo && state.page === 'home' && state.data) $('main').replaceChildren(dashboard()); });
   $('reposort').addEventListener('click', () => {
@@ -2673,6 +3035,7 @@
   $('tokensnav').addEventListener('click', () => go(null, null, 'tokens'));
   $('refresh').addEventListener('click', async () => { state.sig = null; await refresh(true); if (!state.offline && !state.locked) toast('Opdateret'); });
   const bgNotifyOn = () => (prefs.notify && canNotify() && Notification.permission === 'granted') || prefs.sound;
+  document.addEventListener('keydown', (ev) => { handleGlobalShortcut(ev); });
   setInterval(() => { if (!document.hidden || bgNotifyOn()) refresh(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); connectEvents(); } });
   connectEvents();
