@@ -347,12 +347,14 @@ function findActiveQuotaIndex(turnLines, window = 11, strict = false) {
 // window: hvor tæt på bunden kvote-beskeden skal stå. På den gengivne skærm skal den være blandt de sidste linjer,
 // så en agent der bare nævner "rate limit exceeded" midt i et svar, ikke tæller.
 function inspectQuota(buffer, { limit = 20, window = 11, strict = false } = {}) {
-  const { lines, sawTurnDone, turnLines } = splitTurnLines(buffer, limit);
+  const { lines, turnStart, sawTurnDone, turnLines } = splitTurnLines(buffer, limit);
   let targetLines = turnLines;
   let idx = findActiveQuotaIndex(targetLines, window, strict);
   if (idx === -1 && sawTurnDone && !turnLines.some((l) => /^[●⏺⎿•✻✶✳✢]/.test(l))) {
     targetLines = lines;
     idx = findActiveQuotaIndex(targetLines, window, strict);
+    // Claude Code afslutter turen lige efter limit-beskeden. Har agenten skrevet noget nyt efter den (den er gået i gang igen), er den ikke aktiv.
+    if (idx !== -1 && lines.slice(idx + 1, turnStart - 1).some((l) => /^[●⏺]/.test(l) && !quotaLine(l, strict))) idx = -1;
   }
   if (idx === -1) return null;
   const line = targetLines[idx];
