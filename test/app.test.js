@@ -820,7 +820,11 @@ test('indstillinger: en eksisterende fil beholder egne agenter og felter når ro
   const after = cfg.load(file);
   assert.equal(after.config.root, root);
   assert.equal(after.config.port, 5000);
-  assert.deepEqual(after.config.agents, [{ id: 'min', name: 'Min agent', command: 'min-agent --x' }]);
+  assert.deepEqual(after.config.agents.map((a) => a.id), ['min', 'claude', 'gemini', 'mistral', 'codex'], 'egne agenter først, de faste bagefter');
+  assert.deepEqual(after.config.agents[0], { id: 'min', name: 'Min agent', command: 'min-agent --x' });
+  assert.deepEqual(cfg.clean({ agents: [{ id: 'gemini', name: 'Min Gemini', command: 'gemini' }] }).agents.map((a) => [a.id, a.command]),
+    [['gemini', 'gemini'], ['claude', 'claude'], ['mistral', 'vibe'], ['codex', 'codex']], 'filens egen version af en fast agent vinder');
+  assert.deepEqual(cfg.clean({ builtinAgents: false, agents: [{ id: 'min', command: 'x' }] }).agents.map((a) => a.id), ['min'], 'kan slås fra');
   assert.equal(after.raw.egetFelt, 'bliver');
 });
 
@@ -830,7 +834,7 @@ test('indstillinger: ugyldige værdier ryddes væk, og ødelagt JSON giver en kl
   assert.equal(c.port, 4317);
   assert.equal(c.idleSeconds, 8);
   assert.deepEqual(c.brainPaths, ['docs']);
-  assert.deepEqual(c.agents.map((a) => a.id), ['ok']);
+  assert.deepEqual(c.agents.map((a) => a.id), ['ok', 'claude', 'gemini', 'mistral', 'codex']);
   const file = path.join(tmp, 'itu.json');
   fs.writeFileSync(file, '{ikke json');
   assert.throws(() => cfg.load(file), /ikke gyldig JSON/);

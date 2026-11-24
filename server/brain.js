@@ -8,6 +8,9 @@ const MAX_FILES = 400;
 const MAX_DEPTH = 5;
 const MAX_BYTES = 512 * 1024;
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build']);
+// Støj der ikke hører til hjernen: agenternes midlertidige arbejdskopier (fx Claude Codes worktrees)
+// og rolle-rapporterne, som har deres egen fane (Rapporter).
+const SKIP_REL = new Set(['.claude/worktrees', 'docs/reports']);
 
 function createBrain(config) {
   function list(repoDir) {
@@ -26,6 +29,12 @@ function createBrain(config) {
       if (!st.isFile() || !inside(real) || found.has(real)) return;
       found.set(real, { path: path.relative(realRepo, real).split(path.sep).join('/'), size: st.size, mtime: st.mtimeMs });
     }
+    // En undermappe med sin egen .git er en anden checkout (fx en git worktree) – ikke dette repos hjerne.
+    function skipDir(name, abs) {
+      if (SKIP.has(name)) return true;
+      if (SKIP_REL.has(path.relative(realRepo, abs).split(path.sep).join('/'))) return true;
+      try { fs.lstatSync(path.join(abs, '.git')); return true; } catch { return false; }
+    }
     function walk(dir, depth) {
       if (depth > MAX_DEPTH || found.size >= MAX_FILES) return;
       let entries;
@@ -33,7 +42,7 @@ function createBrain(config) {
       entries.sort((a, b) => a.name.localeCompare(b.name, 'da'));
       for (const e of entries) {
         const abs = path.join(dir, e.name);
-        if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(abs, depth + 1); }
+        if (e.isDirectory()) { if (!skipDir(e.name, abs)) walk(abs, depth + 1); }
         else addFile(abs);
       }
     }
@@ -42,7 +51,7 @@ function createBrain(config) {
       const abs = path.join(realRepo, rel);
       let st;
       try { st = fs.statSync(abs); } catch { continue; }
-      if (st.isDirectory()) walk(abs, 0); else addFile(abs);
+      if (st.isDirectory()) { if (!skipDir(path.basename(abs), abs)) walk(abs, 0); } else addFile(abs);
     }
     return [...found.values()].sort((a, b) => a.path.localeCompare(b.path, 'da'));
   }
