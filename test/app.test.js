@@ -840,3 +840,32 @@ test('indstillinger: ugyldige værdier ryddes væk, og ødelagt JSON giver en kl
   assert.throws(() => cfg.load(file), /ikke gyldig JSON/);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ikke json', 'en ødelagt fil overskrives ikke');
 });
+
+test('sessions: udtrækker model og effort fra agent-kommando i /api/state', async () => {
+  const { createSessions } = require('../server/sessions');
+  const tmpCfg = cfg.clean({
+    root,
+    agents: [
+      { id: 'claude', name: 'Claude Code', command: 'claude --model claude-opus-4-6 --effort high' },
+      { id: 'codex', name: 'OpenAI Codex', command: 'codex -m gpt-5.3-codex -c model_reasoning_effort="medium"' },
+      { id: 'plain', name: 'Plain', command: 'echo klar' },
+    ],
+  });
+  const sm = createSessions(tmpCfg);
+  try {
+    const s1 = sm.create({ repo: 'alpha', cwd: path.join(root, 'alpha'), kind: 'agent', agent: { ...tmpCfg.agents[0], command: 'cat' } });
+    // Brug rigtig command på agent-objektet til parse-test via create:
+    assert.equal(s1.model, null);
+    const s2 = sm.create({ repo: 'alpha', cwd: path.join(root, 'alpha'), kind: 'agent', agent: { id: 'claude', name: 'Claude Code', command: 'sh -c "sleep 1" -- --model claude-opus-4-6 --effort high' } });
+    const s3 = sm.create({ repo: 'alpha', cwd: path.join(root, 'alpha'), kind: 'agent', agent: { id: 'codex', name: 'OpenAI Codex', command: 'sh -c "sleep 1" -- -m gpt-5.3-codex -c model_reasoning_effort="medium"' } });
+    const list = sm.list();
+    const v2 = list.find((x) => x.id === s2.id);
+    const v3 = list.find((x) => x.id === s3.id);
+    assert.equal(v2.model, 'claude-opus-4-6');
+    assert.equal(v2.effort, 'high');
+    assert.equal(v3.model, 'gpt-5.3-codex');
+    assert.equal(v3.effort, 'medium');
+  } finally {
+    sm.closeAll();
+  }
+});

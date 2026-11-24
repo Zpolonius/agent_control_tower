@@ -24,6 +24,34 @@ const SCREEN_LIMIT = 80;
 // Taster der besvarer et spørgsmål: Enter, et tal, j/n/y, Esc alene eller Ctrl+C. Piletaster (Esc + [) er ikke et svar.
 const ANSWER_RE = /^(?:[0-9yYnNjJ]|\x1b|\x03)$|[\r\n]/;
 
+function extractFlag(cmd, re) {
+  const m = String(cmd || '').match(re);
+  if (!m) return '';
+  return (m[1] || m[2] || m[3] || '').trim();
+}
+
+function parseAgentModelAndEffort(agent) {
+  if (!agent) return { model: null, effort: null };
+  const cmd = String(agent.command || '');
+  const rawModel = (typeof agent.model === 'string' && agent.model.trim())
+    || extractFlag(cmd, /(?:^|\s)--model[= ](?:"([^"]+)"|'([^']+)'|([^\s"']+))/)
+    || extractFlag(cmd, /(?:^|\s)-m\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/);
+  const rawEffort = (typeof agent.effort === 'string' && agent.effort.trim())
+    || extractFlag(cmd, /(?:^|\s)--effort[= ](?:"([^"]+)"|'([^']+)'|([^\s"']+))/)
+    || extractFlag(cmd, /(?:^|\s)--(?:thinking-level|reasoning-effort)[= ](?:"([^"]+)"|'([^']+)'|([^\s"']+))/)
+    || extractFlag(cmd, /\bmodel_reasoning_effort\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"']+))/);
+  let model = rawModel ? rawModel.slice(0, 80) : null;
+  let effort = rawEffort ? rawEffort.toLowerCase().slice(0, 32) : null;
+  if (model && !effort) {
+    const suffix = model.match(/^(.+?)-(minimal|low|medium|high|xhigh|max)$/i);
+    if (suffix) {
+      model = suffix[1];
+      effort = suffix[2].toLowerCase();
+    }
+  }
+  return { model, effort };
+}
+
 function shellCommand(agentCommand) {
   if (isWin) {
     const exe = 'powershell.exe';
@@ -163,6 +191,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     const wait = st === 'afventer' ? currentWait(s) : null;
     return {
       id: s.id, repo: s.repo, kind: s.kind, agentId: s.agentId, name: s.name,
+      model: s.model || null, effort: s.effort || null,
       startedAt: s.startedAt, lastOutputAt: s.lastOutputAt, endedAt: s.endedAt,
       exitCode: s.exitCode, status: st,
       needsApproval: approval,
@@ -266,6 +295,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       throw err;
     }
     const [exe, args] = shellCommand(kind === 'agent' ? agent.command : null);
+    const parsedAgent = kind === 'agent' ? parseAgentModelAndEffort(agent) : { model: null, effort: null };
     const proc = pty.spawn(exe, args, {
       name: 'xterm-256color', cols: 100, rows: 30, cwd,
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
@@ -275,6 +305,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     const s = {
       id: crypto.randomBytes(12).toString('hex'), repo, kind, cwd, baseline: baseline || null,
       agentId: kind === 'agent' ? agent.id : null,
+      model: parsedAgent.model,
+      effort: parsedAgent.effort,
       name: numbered(kind === 'agent' ? (role ? `${role.name} · ${agent.name}` : agent.name) : 'Terminal', repo, kind === 'agent' ? agent.id : null, role ? role.id : null),
       role: kind === 'agent' && role ? { id: role.id, name: role.name, icon: role.icon, mode: role.mode } : null,
       pendingBrief: kind === 'agent' && brief ? brief : null, briefTimer: null,
