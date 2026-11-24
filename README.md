@@ -44,7 +44,9 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
   "brainPaths": ["docs", "CLAUDE.md", "AGENTS.md", ".claude"],
   "agents": [
     { "id": "claude", "name": "Claude Code", "command": "claude" },
-    { "id": "gemini", "name": "Gemini", "command": "agy" }
+    { "id": "gemini", "name": "Gemini", "command": "agy" },
+    { "id": "mistral", "name": "Mistral", "command": "vibe" },
+    { "id": "codex", "name": "OpenAI Codex", "command": "codex" }
   ],
   "idleSeconds": 8,
   "maxSessions": 12,
@@ -56,8 +58,8 @@ Første start opretter `control-tower.config.json` (filen er ikke med i git). En
 }
 ```
 
-- `agents` er listen over knapper i interfacet. Kun kommandoer på denne liste kan startes som agent.
-- `brainPaths` er de mapper og filer i hvert repo, der vises under "Hjerne" (kun .md, .mdx og .txt).
+- `agents` er listen over knapper i interfacet. Kun kommandoer på denne liste kan startes som agent. Claude Code (`claude`), Gemini (`agy`), Mistral Vibe (`vibe`) og OpenAI Codex (`codex`) er altid med, også i en ældre fil med sin egen liste. Har du en agent med samme id, bruges din. `"builtinAgents": false` slår de faste fra. Hver agent får et lille farvet mærke (C, G, M, O), så du kan se, hvilken model den kører på.
+- `brainPaths` er de mapper og filer i hvert repo, der vises under "Hjerne" (kun .md, .mdx og .txt). Agenternes arbejdskopier (`.claude/worktrees` og andre mapper med deres egen `.git`) og `docs/reports` (som har sin egen fane) tælles ikke med.
 - `idleSeconds` er hvor længe en agent skal være stille, før status skifter fra "Arbejder" til "Venter på dig".
 
 ## Overblikket
@@ -76,12 +78,14 @@ Når en agent venter eller er færdig, viser dens kort og terminalvisning et res
 
 ## Roller og rapporter
 
-Fanen **Roller** i et repo starter en agent i en fast rolle: Fejlfinder, Security, QA-tester, UI/UX-ekspert, Issue/PO eller Udvikler. Du vælger hver gang, hvilken agent rollen skal køre i (Claude Code, Antigravity eller en anden fra din liste), og kan skrive et fokus eller en opgave med. Rollens arbejdsbeskrivelse indsættes hos agenten, så snart den er klar – du læser den og trykker Enter.
+Fanen **Roller** i et repo starter en agent i en fast rolle: Fejlfinder, Security, QA-tester, UI/UX-ekspert, Issue/PO, Udvikler, Orkestrator eller Teknisk dokumentation. Du vælger hver gang, hvilken agent rollen skal køre i (Claude Code, Antigravity eller en anden fra din liste), og kan skrive et fokus eller en opgave med. Rollens arbejdsbeskrivelse indsættes hos agenten, så snart den er klar – du læser den og trykker Enter.
 
 Rollerne er generiske: de finder selv ud af, hvordan repoet bygges og testes. Control Tower gætter teknologien (TypeScript/JavaScript, Kotlin/Android, Flutter/Dart) og giver rollen de tilhørende noter med fra `roles/stacks`.
 
 - **Gennemgangs-rollerne** (Fejlfinder, Security, QA, UI/UX) ændrer ikke din kode. De skriver én rapport i `docs/reports/ÅÅÅÅ-MM-DD-<rolle>.md`.
 - **Rapporter**-fanen viser rapporterne og deler dem op i fund. Hvert fund kan sendes til **Udvikler** (retter, tester, laver en PR og skriver en rapport tilbage) eller til **Issue/PO** (laver issues med acceptkriterie – viser dem først og opretter dem kun efter dit ja).
+- **Orkestrator** tager flere issues, lægger en plan (rækkefølge, afhængigheder, loop-størrelse) og kører dem ét ad gangen gennem skillen `/dev-review-loop` med udvikler- og tester-subagenter – én PR pr. issue. Statustavlen ligger under Rapporter. Den merger aldrig selv.
+- **Teknisk dokumentation** skriver release notes ud fra merged PR'er, retter forældede docs, flytter gennemførte planer til historik og laver en PR, så hjernen passer med koden.
 - Rollerne ligger som markdown-filer i mappen `roles`. Ret dem som almindelig tekst.
 - **Tillæg pr. repo:** læg en fil i repoet på `.control-tower/roles/<rolle>.md`, fx `security.md`, så kommer dens tekst med, når rollen startes i netop det repo. En fil med et nyt navn og egen frontmatter (`name`, `icon`, `description`) bliver en ny rolle, der kun findes i det repo.
 

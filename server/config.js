@@ -9,7 +9,12 @@ const DEFAULTS = {
   root: '',
   port: 4317,
   brainPaths: ['docs', 'CLAUDE.md', 'AGENTS.md', '.claude'],
-  agents: [{ id: 'claude', name: 'Claude Code', command: 'claude' }],
+  agents: [
+    { id: 'claude', name: 'Claude Code', command: 'claude' },
+    { id: 'gemini', name: 'Gemini', command: 'agy' },
+    { id: 'mistral', name: 'Mistral', command: 'vibe' },
+    { id: 'codex', name: 'OpenAI Codex', command: 'codex' },
+  ],
   idleSeconds: 8,
   maxSessions: 12,
   personalSkillsDir: '',
@@ -82,6 +87,12 @@ function clean(raw) {
     if (ok) seen.add(a.id);
     return ok;
   }).map((a) => ({ id: a.id, name: typeof a.name === 'string' && a.name ? a.name.slice(0, 60) : a.id, command: a.command }));
+  // Claude, Gemini, Mistral og OpenAI Codex er altid med – også i en ældre indstillingsfil med sin egen liste. Har filen en agent
+  // med samme id, vinder filens. "builtinAgents": false slår det fra.
+  if (!(raw && raw.builtinAgents === false)) {
+    for (const a of DEFAULTS.agents) if (!seen.has(a.id)) { seen.add(a.id); cfg.agents.push({ ...a }); }
+  }
+  delete cfg.builtinAgents;
   return cfg;
 }
 

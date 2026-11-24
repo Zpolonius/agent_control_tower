@@ -435,3 +435,15 @@ h2:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) {
   .palette-backdrop, .palette, .palette-item { transition: none; animation: none; }
 }
+
+/* Model-mærke: lille farvet bogstav, så Claude, Gemini, Mistral og OpenAI er lette at skelne. */
+.modelchip { display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; margin-right: 6px; border-radius: 50%;
+  font-size: 11px; font-weight: 700; line-height: 1; vertical-align: middle; color: #fff; background: var(--model); }
+.m-claude { --model: #D97757; }
+.m-gemini { --model: #4C8DF6; }
+.m-mistral { --model: #F5A300; }
+.m-openai { --model: #10A37F; }
+.modelchip.m-mistral, .robot .modelmark.m-mistral text { color: #1a1a1a; fill: #1a1a1a; }
+.robot .modelmark circle { fill: var(--model); stroke: var(--panel2); stroke-width: 1.5; }
+.robot .modelmark text { fill: #fff; font: 700 9px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+.robot.mini .modelmark { display: none; }

@@ -1,5 +1,5 @@
 'use strict';
-// Roller: færdige arbejdsbeskrivelser (fejlfinder, security, QA, UX, Issue/PO, udvikler), som gives til en agent.
+// Roller: færdige arbejdsbeskrivelser (fejlfinder, security, QA, UX, Issue/PO, udvikler, orkestrator, teknisk dokumentation), som gives til en agent.
 // Rollerne ligger som markdown-filer i Control Towers egen mappe "roles". Et repo kan give en rolle et tillæg
 // (eller lave sine egne roller) i .control-tower/roles/<id>.md. Teknologi-noter ligger i roles/stacks/<stack>.md.
 // Control Tower læser kun filerne – rapporterne skriver agenten selv i repoets docs/reports.
@@ -11,7 +11,7 @@ const BUILTIN_DIR = path.join(__dirname, '..', 'roles');
 const REPO_DIR = path.join('.control-tower', 'roles');
 const REPORT_DIR = path.join('docs', 'reports');
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const ICONS = new Set(['lup', 'skjold', 'kolbe', 'pensel', 'klippebord', 'skruenoegle', 'robot']);
+const ICONS = new Set(['lup', 'skjold', 'kolbe', 'pensel', 'klippebord', 'skruenoegle', 'bog', 'dirigent', 'robot']);
 const MAX_FILE = 64 * 1024;
 const MAX_REPORT = 512 * 1024;
 const MAX_INPUT = 20000;
@@ -118,7 +118,7 @@ function createRoles({ builtinDir = BUILTIN_DIR } = {}) {
   }
 
   // Gennemgangs-rollerne først, så dem der arbejder videre med fundene, og til sidst repoets egne roller.
-  const ORDER = ['fejlfinder', 'security', 'qa', 'ux', 'po', 'udvikler'];
+  const ORDER = ['fejlfinder', 'security', 'qa', 'ux', 'po', 'udvikler', 'orkestrator', 'dokumentation'];
   const rank = (r) => { const i = ORDER.indexOf(r.id); return i === -1 ? ORDER.length + (r.source === 'repo' ? 1 : 0) : i; };
 
   function list(repoDir) {

@@ -93,8 +93,33 @@
     return n;
   }
 
+  // Hvilken model en agent kører på – gættet ud fra agentens id, navn og kommando i indstillingerne.
+  // Bruges kun til et lille farvet mærke, så Claude, Gemini, Mistral og OpenAI er lette at skelne.
+  const MODELS = {
+    claude: { label: 'Claude', letter: 'C', re: /claude/i },
+    gemini: { label: 'Gemini', letter: 'G', re: /gemini|\bagy\b|antigravity/i },
+    mistral: { label: 'Mistral', letter: 'M', re: /mistral|\bvibe\b|codestral|devstral/i },
+    openai: { label: 'OpenAI', letter: 'O', re: /openai|codex|\bgpt/i },
+  };
+  function modelOf(s) {
+    if (!s || s.kind !== 'agent') return null;
+    const a = ((state.data && state.data.agents) || []).find((x) => x.id === s.agentId) || {};
+    const hay = [s.agentId, a.name, a.command].filter(Boolean).join(' ');
+    const key = Object.keys(MODELS).find((k) => MODELS[k].re.test(hay));
+    return key ? { key, ...MODELS[key] } : null;
+  }
+  function modelChip(s) {
+    const m = modelOf(s);
+    return m ? h('span', { class: `modelchip m-${m.key}`, title: m.label, 'aria-label': m.label, role: 'img', text: m.letter }) : null;
+  }
+  function modelMark(model) {
+    if (!model) return null;
+    return sv('g', { class: `modelmark m-${model.key}` },
+      sv('circle', { cx: 36, cy: 58, r: 7 }), sv('text', { x: 36, y: 58 }, model.letter));
+  }
+
   // Agent-figuren. Ren pynt: selve status står altid også som tekst ved siden af, så den er skjult for skærmlæsere.
-  // Rollens kendetegn: et lille mærke ved figuren (lup, skjold, kolbe, pensel, klippebord, skruenøgle).
+  // Rollens kendetegn: et lille mærke ved figuren (lup, skjold, kolbe, pensel, klippebord, skruenøgle, bog, dirigent).
   function roleMark(icon) {
     const P = {
       lup: [sv('circle', { cx: 98, cy: 14, r: 5 }), sv('line', { x1: 101.6, y1: 17.6, x2: 106, y2: 22 })],
@@ -103,6 +128,8 @@
       pensel: [sv('path', { d: 'M94.5 22.5l9.5-11.5M104 11l2.6-2.6' }), sv('circle', { cx: 94.6, cy: 22.4, r: 1.6 })],
       klippebord: [sv('rect', { x: 94, y: 8.5, width: 12, height: 14.5, rx: 1.5 }), sv('path', { d: 'M97.5 7h5v3h-5zM96.8 14h6.4M96.8 17.5h6.4' })],
       skruenoegle: [sv('path', { d: 'M95 23l7.8-7.8' }), sv('path', { d: 'M102.4 15.6a4.2 4.2 0 1 0 2.4-6.2l-2 2 .3 2.4 2.4.3 2-2' })],
+      bog: [sv('path', { d: 'M94 9.5c2-.8 4-.8 6 .8c2-1.6 4-1.6 6-.8v12c-2-.8-4-.8-6 .8c-2-1.6-4-1.6-6-.8zM100 10.3v12' })],
+      dirigent: [sv('path', { d: 'M100 11.5l-4 7M100 11.5l4 7M97.2 20.5h5.6' }), sv('circle', { cx: 100, cy: 10, r: 2.2 }), sv('circle', { cx: 95.2, cy: 20.5, r: 2 }), sv('circle', { cx: 104.8, cy: 20.5, r: 2 })],
       robot: [sv('rect', { x: 94.5, y: 10, width: 11, height: 9, rx: 2.5 }), sv('path', { d: 'M100 10V7' })],
     };
     return sv('g', { class: 'rolemark' }, sv('circle', { class: 'rolebg', cx: 100, cy: 15, r: 11.5 }), ...(P[icon] || P.robot));
@@ -111,7 +138,7 @@
     return sv('svg', { class: 'roleicon', viewBox: '87 2.5 26 26', 'aria-hidden': 'true', focusable: 'false' }, roleMark(icon));
   }
 
-  function robot(status, mini, icon) {
+  function robot(status, mini, icon, model) {
     const st = (STATUS[status] || STATUS.afsluttet).cls;
     const mark = { wait: '?', extwait: '…', quota: '◴', ready: '✓', fail: '!', done: 'z' }[st];
     return sv('svg', { class: `robot ${st}${mini ? ' mini' : ''}`, viewBox: '0 0 120 84', 'aria-hidden': 'true', focusable: 'false' },
@@ -131,6 +158,7 @@
       st === 'wait' ? sv('line', { class: 'arm wave', x1: 49, y1: 52, x2: 60, y2: 30 }) : sv('line', { class: 'arm right', x1: 49, y1: 56, x2: 64, y2: 65 }),
       sv('line', { class: 'arm left', x1: 23, y1: 56, x2: 14, y2: 65 }),
       mark ? sv('text', { class: 'mark', x: 70, y: 32 }, mark) : null,
+      modelMark(model),
       icon ? roleMark(icon) : null);
   }
 
@@ -315,9 +343,9 @@
     const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
     const quick = quickApproveButtons(s, 'q');
     return h('li', { class: `deskcard ${st.cls}` },
-      robot(s.status, false, s.role && s.role.icon),
+      robot(s.status, false, s.role && s.role.icon, modelOf(s)),
       h('div', { class: 'deskinfo' },
-        h('p', { class: 'deskname' }, h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
+        h('p', { class: 'deskname' }, modelChip(s), h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
         h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
         quick.length ? h('div', { class: 'quickactions' }, quick) : null,
@@ -1004,18 +1032,18 @@
     const nodes = list.map(([id, label]) => tabButton(id, label));
     const repoSessions = sessionsFor(state.repo);
     if (repoSessions.length >= 2) nodes.push(tabButton('grid', `◫ Split (${repoSessions.length})`));
-    for (const s of repoSessions) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s)));
+    for (const s of repoSessions) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s), modelChip(s)));
     const key = focusKey();
     tabs.replaceChildren(...nodes);
     refocus(key);
     const current = tabs.querySelector('[aria-current="page"]');
     if (current && tabs.scrollWidth > tabs.clientWidth) current.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }
-  function tabButton(id, label, extra) {
+  function tabButton(id, label, extra, lead) {
     return h('button', {
       type: 'button', class: 'tab', 'data-key': `tab:${id}`, 'aria-current': state.view === id ? 'page' : null,
       onclick: () => { state.view = id; syncUrl(false); renderTabs(); renderPanel(); refocus(`tab:${id}`); },
-    }, label, extra);
+    }, lead || null, label, extra);
   }
   const branchText = (r) => (r.detached ? `intet branch – står på commit ${r.oid || '?'}` : r.branch || 'ingen branch');
 
@@ -1070,7 +1098,7 @@
   function sessionRow(s, withRepo) {
     return h('li', { class: 'srow' },
       sessionBadge(s),
-      h('span', { class: 'sname' }, withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name),
+      h('span', { class: 'sname' }, modelChip(s), withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name),
       h('span', { class: 'stime', text: s.endedAt ? `sluttede ${ago(s.endedAt)}` : `startet ${ago(s.startedAt)}` }),
       h('button', { type: 'button', class: 'btn small', 'data-key': `show:${s.id}`, 'aria-label': `Vis ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, 'Vis'));
   }
@@ -2401,7 +2429,7 @@
       return h('div', { class: `termcell ${st.cls}`, 'data-cell': s.id },
         h('div', { class: 'termcellbar' },
           h('span', { class: 'termcellhead' },
-            h('strong', { text: s.name }),
+            modelChip(s), h('strong', { text: s.name }),
             !repoScope ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(s.repo, 'overview') }, s.repo) : null,
             h('span', { class: 'termstatus', 'data-cellstatus': s.id }, termStatus(s))),
           h('span', { class: 'termcellactions' },
