@@ -305,3 +305,67 @@ test('tokens: knytter genoptaget Claude-session og lægger subagenter til hoveds
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('tokens: summaryForState udtrækker seneste model og effort (også fra ældre ledger-data)', async () => {
+  const { tmp, alpha, beta, agyBrainDir, claudeProjectsDir, tokensFile, config } = makeTempSetup();
+  try {
+    const now = Date.now();
+    const t1 = new Date(now - 4000).toISOString();
+    const t2 = new Date(now - 2000).toISOString();
+    const proj = path.join(claudeProjectsDir, encodeClaudePath(alpha));
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'sess-model.jsonl'), [
+      JSON.stringify({
+        type: 'assistant', cwd: alpha, timestamp: t1, sessionId: 'sess-model',
+        message: { id: 'm1', model: 'claude-haiku-4-5', usage: { input_tokens: 100, output_tokens: 20 } },
+      }),
+      JSON.stringify({
+        type: 'assistant', cwd: alpha, timestamp: t2, sessionId: 'sess-model', effort: 'high',
+        message: { id: 'm2', model: 'claude-sonnet-4-5', usage: { input_tokens: 200, output_tokens: 40 } },
+      }),
+    ].join('\n') + '\n');
+
+    const agyLog = path.join(agyBrainDir, 'conv-model', '.system_generated', 'logs', 'transcript.jsonl');
+    fs.mkdirSync(path.dirname(agyLog), { recursive: true });
+    fs.writeFileSync(agyLog, JSON.stringify({
+      step_index: 1, type: 'PLANNER_RESPONSE', created_at: t2, model: 'gemini-4-hydrogen-medium',
+      input_tokens: 300, output_tokens: 50,
+    }) + '\n');
+
+    // Ældre ledger-post der kun har modelsByDay (uden latestModel/latestEffort gemt i forvejen)
+    const legacyId = 'cccc00001111222233334444';
+    fs.writeFileSync(tokensFile, JSON.stringify({
+      version: 1,
+      sessions: {
+        [legacyId]: {
+          id: legacyId,
+          repo: 'alpha',
+          agentId: 'gemini',
+          agentName: 'Gemini',
+          startedAt: now - 50000,
+          endedAt: now - 40000,
+          lastAt: now - 40000,
+          counts: { input: 500, cacheRead: 0, cacheWrite: 0, output: 100, total: 600, turns: 1 },
+          byDay: { [localDay(0).slice(0, 10)]: { input: 500, cacheRead: 0, cacheWrite: 0, output: 100, total: 600, turns: 1 } },
+          modelsByDay: { [localDay(0).slice(0, 10)]: { 'gemini-4-hydrogen-high': { input: 500, cacheRead: 0, cacheWrite: 0, output: 100, total: 600, turns: 1 } } },
+        },
+      },
+    }));
+
+    const t = createTokens(config, { getRepoNames: async () => ['alpha', 'beta'] });
+    const claudeSess = { id: 'aaaa00001111222233335555', repo: 'alpha', kind: 'agent', agentId: 'claude', name: 'Claude Code', status: 'arbejder', startedAt: now - 5000, endedAt: null };
+    const agySess = { id: 'bbbb00001111222233336666', repo: 'beta', kind: 'agent', agentId: 'gemini', name: 'Gemini', status: 'arbejder', startedAt: now - 5000, endedAt: null };
+    t.recordSession('start', claudeSess);
+    t.recordSession('start', agySess);
+
+    const st = await t.summaryForState([claudeSess, agySess]);
+    assert.equal(st.sessionTokens[claudeSess.id].model, 'claude-sonnet-4-5');
+    assert.equal(st.sessionTokens[claudeSess.id].effort, 'high');
+    assert.equal(st.sessionTokens[agySess.id].model, 'gemini-4-hydrogen');
+    assert.equal(st.sessionTokens[agySess.id].effort, 'medium');
+    assert.equal(st.sessionTokens[legacyId].model, 'gemini-4-hydrogen');
+    assert.equal(st.sessionTokens[legacyId].effort, 'high');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

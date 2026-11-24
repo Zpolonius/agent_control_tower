@@ -444,6 +444,7 @@ h2:focus { outline: none; }
 .m-mistral { --model: #F5A300; }
 .m-openai { --model: #10A37F; }
 .modelchip.m-mistral, .robot .modelmark.m-mistral text { color: #1a1a1a; fill: #1a1a1a; }
+.modelpill { font-family: var(--mono); font-size: 11px; background: var(--panel2); color: var(--text); border: 1px solid var(--line2); }
 .robot .modelmark circle { fill: var(--model); stroke: var(--panel2); stroke-width: 1.5; }
 .robot .modelmark text { fill: #fff; font: 700 9px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
 .robot.mini .modelmark { display: none; }

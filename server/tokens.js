@@ -65,6 +65,43 @@ function safeModelName(m) {
   return m.trim().slice(0, 80);
 }
 
+function safeEffort(e) {
+  if (typeof e !== 'string') return '';
+  const v = e.trim().toLowerCase().slice(0, 32);
+  return v || '';
+}
+
+function parseModelAndEffort(rawModel, rawEffort) {
+  const m = safeModelName(rawModel);
+  let effort = safeEffort(rawEffort);
+  if (!m) return { model: null, effort: effort || null };
+  const suffix = m.match(/^(.+?)-(minimal|low|medium|high|xhigh|max)$/i);
+  if (suffix) {
+    return { model: suffix[1], effort: effort || suffix[2].toLowerCase() };
+  }
+  return { model: m, effort: effort || null };
+}
+
+function inferModelFromModelsByDay(modelsByDay) {
+  if (!modelsByDay || typeof modelsByDay !== 'object') return null;
+  const days = Object.keys(modelsByDay).sort();
+  for (let i = days.length - 1; i >= 0; i -= 1) {
+    const mMap = modelsByDay[days[i]];
+    if (!mMap || typeof mMap !== 'object') continue;
+    let bestModel = null;
+    let bestTotal = -1;
+    for (const [m, c] of Object.entries(mMap)) {
+      const tot = nonNegInt(c && c.total);
+      if (tot >= bestTotal) {
+        bestTotal = tot;
+        bestModel = m;
+      }
+    }
+    if (bestModel) return bestModel;
+  }
+  return null;
+}
+
 function logTypeForAgent(agent) {
   if (!agent) return 'other';
   const cmd = String(agent.command || '');
@@ -266,6 +303,9 @@ function createTokens(config, { getRepoNames } = {}) {
     let lastAt = null;
     let contextTokens = 0;
     let contextTs = -Infinity;
+    let latestModel = null;
+    let latestEffort = null;
+    let latestModelTs = -Infinity;
 
     await readJsonl(real, (obj) => {
       const ts = typeof obj.created_at === 'string' ? Date.parse(obj.created_at) : NaN;
@@ -299,6 +339,12 @@ function createTokens(config, { getRepoNames } = {}) {
       const day = dayKey(turnTs);
       const model = safeModelName(obj.model) || 'gemini';
       addDayModel(byDay, modelsByDay, day, model, delta);
+      if (turnTs >= latestModelTs) {
+        latestModelTs = turnTs;
+        const parsedME = parseModelAndEffort(obj.model, obj.effort || obj.thinking_level || obj.reasoning_effort);
+        latestModel = parsedME.model || model;
+        latestEffort = parsedME.effort;
+      }
     });
 
     return {
@@ -310,6 +356,8 @@ function createTokens(config, { getRepoNames } = {}) {
       detectedRepo: topRepoHit(hits),
       counts,
       contextTokens,
+      latestModel,
+      latestEffort,
       byDay,
       modelsByDay,
     };
@@ -347,11 +395,14 @@ function createTokens(config, { getRepoNames } = {}) {
       const prev = turnsByKey.get(key);
       const sum = inp + cr + cw + out;
       if (!prev || sum >= prev.sum) {
+        const rawEffort = obj.effort || msg.effort || (obj.thinkingMetadata && obj.thinkingMetadata.effort) || obj.reasoning_effort || obj.thinking_level || '';
         turnsByKey.set(key, {
           sum,
           idx: lineIdx,
           ts: Number.isFinite(ts) ? ts : st.mtimeMs,
           model: safeModelName(msg.model) || 'claude',
+          rawModel: safeModelName(msg.model),
+          rawEffort: typeof rawEffort === 'string' ? rawEffort : '',
           delta: { input: inp, cacheRead: cr, cacheWrite: cw, output: out, turns: 1 },
         });
       }
@@ -363,13 +414,20 @@ function createTokens(config, { getRepoNames } = {}) {
     let contextTokens = 0;
     let latestTurnTs = -Infinity;
     let latestTurnIdx = -1;
+    let latestModel = null;
+    let latestEffort = null;
     for (const turn of turnsByKey.values()) {
       addCounts(counts, turn.delta);
       addDayModel(byDay, modelsByDay, dayKey(turn.ts), turn.model, turn.delta);
       const ctx = turn.delta.input + turn.delta.cacheRead + turn.delta.cacheWrite;
-      if (ctx > 0 && (turn.ts > latestTurnTs || (turn.ts === latestTurnTs && turn.idx >= latestTurnIdx))) {
+      if (turn.ts > latestTurnTs || (turn.ts === latestTurnTs && turn.idx >= latestTurnIdx)) {
         latestTurnTs = turn.ts;
         latestTurnIdx = turn.idx;
+        if (ctx > 0) contextTokens = ctx;
+        const parsedME = parseModelAndEffort(turn.rawModel || turn.model, turn.rawEffort);
+        latestModel = parsedME.model;
+        latestEffort = parsedME.effort;
+      } else if (ctx > 0 && contextTokens === 0) {
         contextTokens = ctx;
       }
     }
@@ -390,6 +448,8 @@ function createTokens(config, { getRepoNames } = {}) {
       detectedRepo,
       counts,
       contextTokens,
+      latestModel,
+      latestEffort,
       byDay,
       modelsByDay,
     };
@@ -574,9 +634,13 @@ function createTokens(config, { getRepoNames } = {}) {
       const log = byLogId.get(entry.logId);
       if (!log) continue;
       const nextContextTokens = log.contextTokens || 0;
-      if (!entry.counts || entry.counts.total !== log.counts.total || entry.counts.turns !== log.counts.turns || entry.lastAt !== log.lastAt || entry.contextTokens !== nextContextTokens) {
+      const nextModel = log.latestModel || null;
+      const nextEffort = log.latestEffort || null;
+      if (!entry.counts || entry.counts.total !== log.counts.total || entry.counts.turns !== log.counts.turns || entry.lastAt !== log.lastAt || entry.contextTokens !== nextContextTokens || entry.latestModel !== nextModel || entry.latestEffort !== nextEffort) {
         entry.counts = cloneCounts(log.counts);
         entry.contextTokens = nextContextTokens;
+        entry.latestModel = nextModel;
+        entry.latestEffort = nextEffort;
         entry.byDay = log.byDay;
         entry.modelsByDay = log.modelsByDay;
         entry.lastAt = log.lastAt;
@@ -656,6 +720,8 @@ function createTokens(config, { getRepoNames } = {}) {
       if (entry.logId) claimed.add(entry.logId);
       const live = activeIds.get(entry.id);
       const meta = resolveAgentMeta(entry.agentId, entry.logType);
+      const fallbackModel = !entry.latestModel ? inferModelFromModelsByDay(entry.modelsByDay) : null;
+      const parsedME = parseModelAndEffort(entry.latestModel || fallbackModel, entry.latestEffort);
       records.push({
         id: entry.id,
         source: 'control-tower',
@@ -667,6 +733,8 @@ function createTokens(config, { getRepoNames } = {}) {
         lastAt: entry.lastAt || entry.endedAt || entry.startedAt,
         counts: entry.counts || emptyCounts(),
         contextTokens: entry.contextTokens || 0,
+        latestModel: parsedME.model,
+        latestEffort: parsedME.effort,
         byDay: entry.byDay || {},
         modelsByDay: entry.modelsByDay || {},
         matched: Boolean(entry.logId),
@@ -796,7 +864,13 @@ function createTokens(config, { getRepoNames } = {}) {
     const sessionTokens = {};
     for (const rec of records) {
       if (rec.source !== 'control-tower') continue;
-      sessionTokens[rec.id] = { ...cloneCounts(rec.counts), contextTokens: rec.contextTokens || 0, matched: rec.matched };
+      sessionTokens[rec.id] = {
+        ...cloneCounts(rec.counts),
+        contextTokens: rec.contextTokens || 0,
+        model: rec.latestModel || null,
+        effort: rec.latestEffort || null,
+        matched: rec.matched,
+      };
     }
     const byRepo = {};
     for (const r of agg.byRepo) {
