@@ -781,3 +781,68 @@ test('Command Palette og Alt+N fejler ikke når state.data mangler (locked) elle
     h.cleanup();
   }
 });
+
+test('Agentkort og terminal-status viser model og effort tydeligt', async () => {
+  const now = Date.now();
+  const h = createHarness({
+    root: '/tmp/projects',
+    repos: [{ name: 'alpha', branch: 'main', dirty: 0, ahead: 0, behind: 0 }],
+    agents: [
+      { id: 'claude', name: 'Claude Code', command: 'claude' },
+      { id: 'gemini', name: 'Gemini', command: 'agy' },
+    ],
+    sessions: [
+      {
+        id: 'sess-claude',
+        repo: 'alpha',
+        kind: 'agent',
+        agentId: 'claude',
+        name: 'Claude Code',
+        status: 'arbejder',
+        startedAt: now - 5000,
+        lastOutputAt: now - 1000,
+        model: 'claude-opus-4-6',
+        effort: 'high',
+        tokens: { total: 1200, input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, contextTokens: 1000, model: 'claude-opus-4-6', effort: 'high' },
+      },
+      {
+        id: 'sess-gemini',
+        repo: 'alpha',
+        kind: 'agent',
+        agentId: 'gemini',
+        name: 'Gemini',
+        status: 'venter',
+        startedAt: now - 4000,
+        lastOutputAt: now - 2000,
+        tokens: { total: 500, input: 400, output: 100, cacheRead: 0, cacheWrite: 0, contextTokens: 400, model: 'gemini-4-hydrogen-medium', effort: null },
+      },
+      {
+        id: 'sess-plain',
+        repo: 'alpha',
+        kind: 'agent',
+        agentId: 'claude',
+        name: 'Claude Code 2',
+        status: 'arbejder',
+        startedAt: now - 3000,
+        lastOutputAt: now - 500,
+      },
+    ],
+  });
+  try {
+    await h.flush();
+    const claudeChip = h.doc.querySelector('[data-model="sess-claude"]');
+    assert.ok(claudeChip, 'Claude-sessionen skal vise et model/effort-mærke');
+    assert.match(claudeChip.textContent, /Opus 4\.6/i);
+    assert.match(claudeChip.textContent, /high/i);
+
+    const geminiChip = h.doc.querySelector('[data-model="sess-gemini"]');
+    assert.ok(geminiChip, 'Gemini-sessionen skal vise model og effort udtrukket fra modelnavn');
+    assert.match(geminiChip.textContent, /Gemini 4 Hydrogen/i);
+    assert.match(geminiChip.textContent, /medium/i);
+
+    const plainChip = h.doc.querySelector('[data-model="sess-plain"]');
+    assert.ok(!plainChip || plainChip.hidden, 'Session uden kendt model/effort skal ikke vise et tomt mærke');
+  } finally {
+    h.cleanup();
+  }
+});

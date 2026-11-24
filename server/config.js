@@ -86,7 +86,12 @@ function clean(raw) {
       && typeof a.command === 'string' && a.command.trim() && !seen.has(a.id);
     if (ok) seen.add(a.id);
     return ok;
-  }).map((a) => ({ id: a.id, name: typeof a.name === 'string' && a.name ? a.name.slice(0, 60) : a.id, command: a.command }));
+  }).map((a) => {
+    const out = { id: a.id, name: typeof a.name === 'string' && a.name ? a.name.slice(0, 60) : a.id, command: a.command };
+    if (typeof a.model === 'string' && a.model.trim()) out.model = a.model.trim().slice(0, 80);
+    if (typeof a.effort === 'string' && a.effort.trim()) out.effort = a.effort.trim().slice(0, 32);
+    return out;
+  });
   // Claude, Gemini, Mistral og OpenAI Codex er altid med – også i en ældre indstillingsfil med sin egen liste. Har filen en agent
   // med samme id, vinder filens. "builtinAgents": false slår det fra.
   if (!(raw && raw.builtinAgents === false)) {

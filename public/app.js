@@ -131,6 +131,48 @@
     const m = modelOf(s);
     return m ? h('span', { class: `modelchip m-${m.key}`, title: m.label, 'aria-label': m.label, role: 'img', text: m.letter }) : null;
   }
+
+  function formatModelName(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    // Fjern eventuel datomarkering til sidst (fx -20250514 eller -2025-05-14)
+    const clean = s.replace(/-(?:20\d{6}|20\d{2}-\d{2}-\d{2})$/, '');
+    const claude = clean.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:-|$)/i);
+    if (claude) {
+      const fam = claude[1][0].toUpperCase() + claude[1].slice(1).toLowerCase();
+      return claude[3] ? `${fam} ${claude[2]}.${claude[3]}` : `${fam} ${claude[2]}`;
+    }
+    const gemini = clean.match(/^gemini-(.+)$/i);
+    if (gemini) {
+      return `Gemini ${gemini[1].split('-').map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p)).join(' ')}`;
+    }
+    return clean;
+  }
+
+  function sessionModelEffortProps(s) {
+    if (!s || s.kind !== 'agent') return { hidden: true, text: '', title: '' };
+    let rawModel = (s.tokens && s.tokens.model) || s.model || '';
+    let effort = (s.tokens && s.tokens.effort) || s.effort || '';
+    if (rawModel && !effort) {
+      const suffix = String(rawModel).match(/^(.+?)-(minimal|low|medium|high|xhigh|max)$/i);
+      if (suffix) {
+        rawModel = suffix[1];
+        effort = suffix[2].toLowerCase();
+      }
+    }
+    const modelLabel = formatModelName(rawModel);
+    if (!modelLabel && !effort) return { hidden: true, text: '', title: '' };
+    const text = modelLabel && effort ? `${modelLabel} · ${effort}` : (modelLabel || effort);
+    const titleParts = [];
+    if (rawModel) titleParts.push(`Model: ${rawModel}`);
+    if (effort) titleParts.push(`Effort: ${effort}`);
+    return { hidden: false, text, title: titleParts.join(' · ') };
+  }
+
+  function modelEffortChip(s) {
+    const p = sessionModelEffortProps(s);
+    return h('span', { class: 'chip modelpill', 'data-model': s.id, title: p.title, hidden: p.hidden, text: p.text });
+  }
   function modelMark(model) {
     if (!model) return null;
     return sv('g', { class: `modelmark m-${model.key}` },
@@ -380,7 +422,7 @@
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, modelChip(s), h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
         s.worktree ? h('p', { class: 'deskwt' }, worktreeChip(s, true)) : null,
-        h('p', { class: 'deskstatus' }, sessionBadge(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
+        h('p', { class: 'deskstatus' }, sessionBadge(s), modelEffortChip(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
         quick.length ? h('div', { class: 'quickactions' }, quick) : null,
         wtActions.length ? h('div', { class: 'quickactions' }, wtActions) : null,
@@ -426,6 +468,12 @@
         if (n.className !== cp.cls) n.className = cp.cls;
         n.title = cp.title;
         n.hidden = cp.hidden;
+      }
+      const mp = sessionModelEffortProps(s);
+      for (const n of document.querySelectorAll(`[data-model="${s.id}"]`)) {
+        if (n.textContent !== mp.text) n.textContent = mp.text;
+        n.title = mp.title;
+        n.hidden = mp.hidden;
       }
     }
   }
@@ -1218,6 +1266,7 @@
     return h('li', { class: 'srow' },
       sessionBadge(s),
       h('span', { class: 'sname' }, modelChip(s), withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name, ' ', worktreeChip(s, true)),
+      s.kind === 'agent' ? modelEffortChip(s) : null,
       h('span', { class: 'stime', text: s.endedAt ? `sluttede ${ago(s.endedAt)}` : `startet ${ago(s.startedAt)}` }),
       h('button', { type: 'button', class: 'btn small', 'data-key': `show:${s.id}`, 'aria-label': `Vis ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, 'Vis'));
   }
@@ -2385,6 +2434,7 @@
     const txt = s.tokens && s.tokens.total ? `${fmtTok(s.tokens.total)} tokens` : '0 tokens';
     return [
       sessionBadge(s),
+      modelEffortChip(s),
       h('span', { class: 'chip muted', 'data-tokenchip': s.id, title: tokBreakdown(s.tokens) || 'Ingen tokens registreret endnu', text: txt }),
       contextChip(s.tokens, s.id),
     ];
