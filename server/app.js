@@ -12,6 +12,7 @@ const { createSkills } = require('./skills');
 const { createTokens } = require('./tokens');
 const summary = require('./summary');
 const { createRoles } = require('./roles');
+const worktree = require('./worktree');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MODULES = path.join(__dirname, '..', 'node_modules');
@@ -50,6 +51,7 @@ function createApp({ config, token }) {
   const github = createGithub();
   const skills = createSkills(config);
   const roles = createRoles();
+  const worktreeBase = config.root ? path.join(config.root, '.control-tower-worktrees') : null;
   const headers = sec.securityHeaders(port);
 
   function send(res, code, body, type) {
@@ -180,6 +182,7 @@ function createApp({ config, token }) {
       const s = sessions.get(sm[1]);
       if (!s) return fail(res, 404, 'Ukendt session');
       if (s.kind !== 'agent') return send(res, 200, { available: false, reason: 'Resumé findes kun for agenter.' });
+      if (s.worktree && s.worktree.cleaned) return send(res, 200, { available: false, reason: 'Worktree er ryddet op.', startedAt: s.startedAt, endedAt: s.endedAt, lastOutputAt: s.lastOutputAt });
       const data = await summary.summarize(s.cwd, s.baseline);
       return send(res, 200, { ...data, startedAt: s.startedAt, endedAt: s.endedAt, lastOutputAt: s.lastOutputAt });
     }
@@ -189,8 +192,15 @@ function createApp({ config, token }) {
       const s = sessions.get(dm[1]);
       if (!s) return fail(res, 404, 'Ukendt session');
       if (s.kind !== 'agent') return send(res, 200, { available: false, reason: 'Diff findes kun for agenter.' });
+      if (s.worktree && s.worktree.cleaned) return send(res, 200, { available: false, reason: 'Worktree er ryddet op.' });
       const data = await summary.diff(s.cwd, s.baseline, { file: url.searchParams.get('file'), commit: url.searchParams.get('commit') });
       return send(res, 200, data);
+    }
+
+    if (req.method === 'GET' && route === '/api/worktrees') {
+      const dir = scanner.resolve(url.searchParams.get('repo'));
+      if (!dir) return fail(res, 404, 'Ukendt repo');
+      return send(res, 200, await worktree.list(dir, worktreeBase));
     }
 
     if (req.method === 'GET' && route === '/api/issues') {
@@ -217,8 +227,9 @@ function createApp({ config, token }) {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) return fail(res, 415, 'Forventede JSON');
       let body;
       try { body = await readJson(req, 512 * 1024); } catch (err) { return fail(res, err.status || 400, err.message); }
-      const cwd = scanner.resolve(body.repo);
-      if (!cwd) return fail(res, 404, 'Ukendt repo');
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(res, 400, 'Forventede et JSON-objekt');
+      const repoDir = scanner.resolve(body.repo);
+      if (!repoDir) return fail(res, 404, 'Ukendt repo');
       let agent = null;
       if (body.kind === 'agent') {
         // Browseren sender kun et id. Selve kommandoen slås op i din indstillingsfil.
@@ -236,18 +247,41 @@ function createApp({ config, token }) {
       if (body.roleId != null) {
         if (body.kind !== 'agent' || typeof body.roleId !== 'string') return fail(res, 400, 'En rolle kræver en agent');
         if (body.input != null && typeof body.input !== 'string') return fail(res, 400, 'Ugyldig tekst til rollen');
-        built = roles.build(cwd, body.repo, body.roleId, body.input || '');
+        built = roles.build(repoDir, body.repo, body.roleId, body.input || '');
         if (!built) return fail(res, 400, 'Ukendt rolle');
       }
+      let wt = null;
+      if (body.worktree != null && body.worktree !== false) {
+        const runningCount = sessions.running();
+        if (runningCount >= config.maxSessions) {
+          return fail(res, 429, `Der kører allerede ${runningCount} sessioner (maks. ${config.maxSessions}). Stop eller fjern en session først.`);
+        }
+        try {
+          wt = await worktree.create({
+            repoDir,
+            repo: body.repo,
+            worktreeBase,
+            opts: body.worktree,
+            agentId: agent ? agent.id : 'shell',
+          });
+        } catch (err) {
+          return fail(res, err.status || 400, err.message || 'Kunne ikke oprette worktree');
+        }
+      }
+      const cwd = wt ? wt.path : repoDir;
       try {
         // For agenter huskes repoets tilstand ved start, så der kan vises et resumé bagefter.
         const baseline = body.kind === 'agent' ? await summary.baseline(cwd) : null;
         return send(res, 201, sessions.create({
-          repo: body.repo, cwd, kind: body.kind, agent, baseline,
+          repo: body.repo, repoDir, cwd, kind: body.kind, agent, baseline,
           role: built && built.role, brief: built && built.text,
           initialPaste: body.initialPaste || null,
+          worktree: wt,
         }));
       } catch (err) {
+        if (wt) {
+          await worktree.cleanup({ repoDir, worktreeBase, worktree: wt, force: true }).catch(() => {});
+        }
         return fail(res, err.code === 'LIMIT' ? 429 : 500, err.code === 'LIMIT' ? err.message : 'Terminalen kunne ikke startes');
       }
     }
@@ -271,6 +305,7 @@ function createApp({ config, token }) {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) return fail(res, 415, 'Forventede JSON');
       let body;
       try { body = await readJson(req, 512 * 1024); } catch (err) { return fail(res, err.status || 400, err.message); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(res, 400, 'Forventede et JSON-objekt');
       if (typeof body.text !== 'string') return fail(res, 400, 'Mangler tekst');
       let text = body.text;
       if (body.roleId != null && body.roleId !== '') {
@@ -290,9 +325,53 @@ function createApp({ config, token }) {
       }[result]);
     }
 
+    const wm = route.match(/^\/api\/sessions\/([a-f0-9]{24})\/worktree\/cleanup$/);
+    if (req.method === 'POST' && wm) {
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) return fail(res, 415, 'Forventede JSON');
+      let body;
+      try { body = await readJson(req); } catch (err) { return fail(res, err.status || 400, err.message); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(res, 400, 'Forventede et JSON-objekt.');
+      const s = sessions.get(wm[1]);
+      if (!s) return fail(res, 404, 'Ukendt session');
+      if (!s.worktree) return fail(res, 400, 'Sessionen kører ikke i en worktree.');
+      if (s.exitCode == null) return fail(res, 409, 'Stop sessionen, før worktree ryddes op.');
+      if (s.worktree.cleaned) return fail(res, 409, 'Worktree er allerede ryddet op.');
+      if (body.targetBranch != null && typeof body.targetBranch !== 'string') {
+        return fail(res, 400, 'Ugyldigt mål-branchnavn.');
+      }
+      const resWt = await worktree.cleanup({
+        repoDir: s.repoDir,
+        worktreeBase,
+        worktree: s.worktree,
+        merge: body.merge === true,
+        deleteBranch: body.deleteBranch === true,
+        targetBranch: body.targetBranch || null,
+        force: body.force === true,
+      });
+      if (!resWt.ok) return send(res, resWt.status || 409, { error: resWt.error, dirty: !!resWt.dirty });
+      sessions.markWorktreeCleaned(s.id);
+      if (body.removeSession === true) sessions.remove(s.id);
+      return send(res, 200, resWt);
+    }
+
     const m = route.match(/^\/api\/sessions\/([a-f0-9]{24})$/);
     if (req.method === 'DELETE' && m) {
-      return sessions.remove(m[1]) ? send(res, 200, { ok: true }) : fail(res, 404, 'Ukendt session');
+      const s = sessions.get(m[1]);
+      if (!s) return fail(res, 404, 'Ukendt session');
+      if (s.exitCode != null && s.worktree && !s.worktree.cleaned && url.searchParams.get('keepWorktree') !== '1') {
+        const resWt = await worktree.cleanup({
+          repoDir: s.repoDir,
+          worktreeBase,
+          worktree: s.worktree,
+          merge: url.searchParams.get('merge') === '1',
+          deleteBranch: url.searchParams.get('deleteBranch') === '1',
+          force: true,
+        });
+        if (!resWt.ok) return fail(res, resWt.status || 409, resWt.error);
+        sessions.markWorktreeCleaned(s.id);
+      }
+      sessions.remove(m[1]);
+      return send(res, 200, { ok: true });
     }
 
     return fail(res, 404, 'Ikke fundet');

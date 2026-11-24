@@ -203,6 +203,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
       stopped: !!s.killed, fresh: !s.hadUserInput, approvalSince: approval ? s.approvalSince : null,
       pendingPaste: s.pendingPaste,
       role: s.role, briefPending: !!s.pendingBrief,
+      worktree: s.worktree ? { branch: s.worktree.branch, baseBranch: s.worktree.baseBranch || null, mode: s.worktree.mode, cleaned: !!s.worktree.cleaned } : null,
     };
   }
 
@@ -217,7 +218,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return {
       st,
       approval,
-      sig: JSON.stringify([st, s.exitCode, !!s.killed, approval, approvalKey, waitingFor, waitingDetail, s.pendingPaste, !!s.pendingBrief]),
+      sig: JSON.stringify([st, s.exitCode, !!s.killed, approval, approvalKey, waitingFor, waitingDetail, s.pendingPaste, !!s.pendingBrief, s.worktree ? !!s.worktree.cleaned : null]),
     };
   }
 
@@ -287,7 +288,7 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
   }
 
   // role/brief: startes agenten i en rolle, indsættes rollens arbejdsbeskrivelse, så snart agenten er klar.
-  function create({ repo, cwd, kind, agent, baseline, role, brief, initialPaste }) {
+  function create({ repo, repoDir, cwd, kind, agent, baseline, role, brief, initialPaste, worktree }) {
     const running = [...sessions.values()].filter((s) => s.exitCode == null).length;
     if (running >= config.maxSessions) {
       const err = new Error(`Der kører allerede ${running} sessioner (maks. ${config.maxSessions}). Stop eller fjern en session først.`);
@@ -303,7 +304,8 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     const now = Date.now();
     const queuedPaste = kind === 'agent' && typeof initialPaste === 'string' && initialPaste.trim().length > 0 ? initialPaste : null;
     const s = {
-      id: crypto.randomBytes(12).toString('hex'), repo, kind, cwd, baseline: baseline || null,
+      id: crypto.randomBytes(12).toString('hex'), repo, repoDir: repoDir || cwd, kind, cwd, baseline: baseline || null,
+      worktree: worktree || null,
       agentId: kind === 'agent' ? agent.id : null,
       model: parsedAgent.model,
       effort: parsedAgent.effort,
@@ -564,12 +566,20 @@ function createSessions(config, { waitChecker = createWaitChecker(), onSessionEv
     return true;
   }
 
+  function markWorktreeCleaned(id) {
+    const s = get(id);
+    if (!s || !s.worktree) return false;
+    s.worktree.cleaned = true;
+    checkStateChange(s, 'worktree');
+    return true;
+  }
+
   function closeAll() { for (const s of sessions.values()) kill(s); }
   // Bruges når Control Tower selv lukker: der må ikke ligge processer tilbage bagefter.
   function forceAll() { for (const s of sessions.values()) { s.killed = true; signal(s, 'SIGKILL'); } }
   const running = () => [...sessions.values()].filter((s) => s.exitCode == null).length;
 
-  return { create, get, attach, paste, approve, remove, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
+  return { create, get, attach, paste, approve, remove, markWorktreeCleaned, closeAll, forceAll, running, refreshWaits, list: () => [...sessions.values()].map(view), hostname: os.hostname() };
 }
 
 module.exports = { createSessions, lastLine, PASTE_MAX, BRIEF_QUIET_MS };

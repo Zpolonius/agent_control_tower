@@ -21,6 +21,7 @@
     data: null, repo: null, page: 'home', view: 'overview', filter: '', offline: false, tokenPeriod: 'all',
     splitTerm: null, missionOnlyActive: true, missionCols: 2,
     brainFile: {}, pr: {}, issue: {}, issuesCache: {}, prsCache: {}, issueSkill: {}, skill: {}, skillDraft: {}, summary: {}, notifiedApproval: new Map(), prevStatus: null, prevApproval: null, stoppedByMe: new Set(), target: null, terms: new Map(),
+    wtOpen: {}, wtData: {}, wtDraft: {}, wtForcePrompt: {},
   };
 
   const fmtInt = (n) => Number(n || 0).toLocaleString('da-DK');
@@ -85,6 +86,24 @@
       h('span', { class: 'glyph', 'aria-hidden': 'true', text: s.glyph }), label);
   }
   const sessionBadge = (s) => badge(s.status, s.waitingFor, s.waitingDetail, s.needsApproval);
+  function worktreeChip(s, withPrefix = false) {
+    if (!s || !s.worktree || !s.worktree.branch) return null;
+    const cleaned = !!s.worktree.cleaned;
+    const prefix = withPrefix ? 'Worktree: ' : '⑂ ';
+    return h('span', {
+      class: `chip wtchip${cleaned ? ' muted' : ''}`,
+      'data-wtchip': s.id,
+      'data-wtprefix': withPrefix ? '1' : '0',
+      title: cleaned ? `Worktree ryddet op (${s.worktree.branch})` : `Isoleret git worktree på branch ${s.worktree.branch}`,
+      text: `${prefix}${s.worktree.branch}${cleaned ? ' (ryddet)' : ''}`,
+    });
+  }
+  function syncWorktreeChips(s) {
+    for (const el of document.querySelectorAll(`[data-wtchip="${s.id}"]`)) {
+      const nextChip = worktreeChip(s, el.dataset.wtprefix === '1');
+      if (nextChip) el.replaceWith(nextChip);
+    }
+  }
   const SVG = 'http://www.w3.org/2000/svg';
   function sv(tag, attrs, ...kids) {
     const n = document.createElementNS(SVG, tag);
@@ -334,7 +353,12 @@
       })));
       if (r.fileCount > r.files.length) out.push(h('p', { class: 'hint', text: `…og ${r.fileCount - r.files.length} filer mere.` }));
     }
-    out.push(h('p', { class: 'hint', text: 'Bygger på git: viser alt der er ændret i repoet, siden agenten startede – også hvis du selv eller en anden agent har ændret noget imens.' }));
+    out.push(h('p', {
+      class: 'hint',
+      text: s.worktree
+        ? `Bygger på git-worktree (${s.worktree.branch}): viser kun ændringer lavet i denne isolerede worktree.`
+        : 'Bygger på git: viser alt der er ændret i repoet, siden agenten startede – også hvis du selv eller en anden agent har ændret noget imens.',
+    }));
     return out;
   }
 
@@ -384,13 +408,24 @@
     const st = STATUS[s.status] || STATUS.afsluttet;
     const action = { venter: 'Svar agenten', fejlet: 'Se fejlen', kvote: 'Se status', faerdig: 'Se resultatet', afventer: 'Følg med', arbejder: 'Følg med', afsluttet: 'Se resultatet' }[s.status];
     const quick = quickApproveButtons(s, 'q');
+    const wtActions = s.exitCode != null && s.worktree && !s.worktree.cleaned ? [
+      h('button', { type: 'button', class: 'btn small primary', 'data-key': `wtmerge:${s.id}`,
+        onclick: () => cleanupWorktree(s.id, { merge: true, deleteBranch: true }) }, 'Merge & ryd op'),
+      state.wtForcePrompt[s.id]
+        ? h('button', { type: 'button', class: 'btn small danger', 'data-key': `wtforce:${s.id}`,
+          onclick: () => cleanupWorktree(s.id, { merge: false, deleteBranch: false, force: true }) }, 'Tving fjernelse')
+        : h('button', { type: 'button', class: 'btn small', 'data-key': `wtclean:${s.id}`,
+          onclick: () => cleanupWorktree(s.id, { merge: false, deleteBranch: false }) }, 'Fjern worktree'),
+    ] : [];
     return h('li', { class: `deskcard ${st.cls}` },
       robot(s.status, false, s.role && s.role.icon, modelOf(s)),
       h('div', { class: 'deskinfo' },
         h('p', { class: 'deskname' }, modelChip(s), h('strong', { text: s.name }), withRepo ? h('span', { class: 'deskrepo', text: s.repo }) : null),
+        s.worktree ? h('p', { class: 'deskwt' }, worktreeChip(s, true)) : null,
         h('p', { class: 'deskstatus' }, sessionBadge(s), modelEffortChip(s), h('span', { class: 'stime', 'data-time': s.id, text: timeText(s) }), contextChip(s.tokens, s.id)),
         h('p', { class: 'bubble', 'data-line': s.id, text: bubbleText(s) }),
         quick.length ? h('div', { class: 'quickactions' }, quick) : null,
+        wtActions.length ? h('div', { class: 'quickactions' }, wtActions) : null,
         h('p', { class: 'desktokens', 'data-tokens': s.id, title: tokBreakdown(s.tokens), text: sessionTokenLine(s.tokens) }),
         s.status === 'arbejder' || s.status === 'afventer' ? null : h('p', { class: 'desksum', 'data-sum': s.id, text: sumLine(state.summary[s.id]) })),
       h('button', { type: 'button', class: `btn ${s.status === 'venter' ? 'primary' : ''}`, 'data-key': `desk:${s.id}`,
@@ -888,7 +923,7 @@
     }
     // Tegn kun om, når noget faktisk har ændret sig – ellers ville tastaturfokus forsvinde hvert 3. sekund.
     const sig = JSON.stringify([state.offline, state.locked, state.data && state.data.repos, state.data && state.data.skipped,
-      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.approvalKey, x.waitingFor, x.waitingDetail, x.pendingPaste])]);
+      state.data && state.data.sessions.map((x) => [x.id, x.status, x.needsApproval, x.approvalKey, x.waitingFor, x.waitingDetail, x.pendingPaste, x.worktree && x.worktree.branch, x.worktree && x.worktree.cleaned])]);
     loadSummaries();
     if (sig === state.sig) { updateLiveText(); return; }
     state.sig = sig;
@@ -1064,11 +1099,94 @@
           : h('p', { class: 'alert', role: 'alert', text: 'Mappen findes ikke længere i din projektmappe (slettet eller omdøbt). Sessionerne herunder kører stadig og kan åbnes og stoppes.' })),
       repo ? h('div', { class: 'actions' },
         h('button', { type: 'button', class: 'btn', onclick: () => start('shell') }, 'Åbn terminal'),
+        h('button', { type: 'button', class: 'btn', 'data-key': 'wt-toggle', 'aria-expanded': String(!!state.wtOpen[state.repo]), onclick: () => toggleWorktreeBar(state.repo) }, '⑂ Worktree…'),
         // Kun den første agent er fremhævet, så der er én tydelig "start"-knap.
         state.data.agents.map((a, i) => h('button', { type: 'button', class: `btn${i === 0 ? ' primary' : ''}`, onclick: () => start('agent', a.id) }, `Start ${a.name}`))) : null);
-    main.replaceChildren(head, h('nav', { id: 'tabs', class: 'tabs', 'aria-label': 'Visninger i repoet' }), h('section', { id: 'panel', class: 'panel' }));
+    main.replaceChildren(head, repo && state.wtOpen[state.repo] ? worktreeBar(state.repo) : null, h('nav', { id: 'tabs', class: 'tabs', 'aria-label': 'Visninger i repoet' }), h('section', { id: 'panel', class: 'panel' }));
     renderTabs();
     renderPanel();
+  }
+
+  function toggleWorktreeBar(repo) {
+    state.wtOpen[repo] = !state.wtOpen[repo];
+    if (state.wtOpen[repo]) {
+      api(`/api/worktrees?repo=${encodeURIComponent(repo)}`).then((data) => {
+        state.wtData[repo] = data;
+        if (state.repo === repo && state.wtOpen[repo]) {
+          const key = focusKey();
+          renderMain();
+          refocus(key);
+        }
+      }).catch(() => {});
+    }
+    const key = focusKey();
+    renderMain();
+    refocus(key);
+  }
+
+  function worktreeBar(repo) {
+    const draft = state.wtDraft[repo] || { mode: 'new', branch: '', existing: '', baseBranch: '' };
+    state.wtDraft[repo] = draft;
+    const wtInfo = state.wtData[repo] || { branches: [] };
+    const freeBranches = wtInfo.branches.filter((b) => !b.checkedOut);
+    if (draft.mode === 'existing' && (!draft.existing || !freeBranches.some((b) => b.name === draft.existing))) {
+      draft.existing = freeBranches.length ? freeBranches[0].name : '';
+    }
+
+    const branchInput = h('input', {
+      id: 'wtbranch', 'data-key': 'wtbranch', type: 'text', maxlength: '120', autocomplete: 'off', spellcheck: 'false',
+      placeholder: 'fx feat/min-opgave (tom = automatisk)',
+      value: draft.branch || '',
+      oninput: (e) => { draft.branch = e.target.value; },
+    });
+    const baseSel = h('select', {
+      id: 'wtbase', 'data-key': 'wtbase',
+      onchange: (e) => { draft.baseBranch = e.target.value; },
+    },
+      h('option', { value: '', selected: !draft.baseBranch }, 'Aktuel HEAD'),
+      wtInfo.branches.map((b) => h('option', { value: b.name, selected: draft.baseBranch === b.name }, b.name)));
+
+    const existingSel = h('select', {
+      id: 'wtexisting', 'data-key': 'wtexisting',
+      onchange: (e) => { draft.existing = e.target.value; },
+    },
+      wtInfo.branches.length
+        ? [
+          !freeBranches.length ? h('option', { value: '', selected: true }, 'Ingen ledige branches') : null,
+          ...wtInfo.branches.map((b) => h('option', { value: b.name, disabled: b.checkedOut, selected: !b.checkedOut && draft.existing === b.name }, `${b.name}${b.checkedOut ? ' (i brug)' : ''}`)),
+        ]
+        : h('option', { value: '' }, 'Ingen branches fundet'));
+
+    const modeSel = h('select', {
+      id: 'wtmode', 'data-key': 'wtmode',
+      onchange: (e) => { const key = focusKey(); draft.mode = e.target.value; renderMain(); refocus(key); },
+    },
+      h('option', { value: 'new', selected: draft.mode === 'new' }, 'Ny branch'),
+      h('option', { value: 'existing', selected: draft.mode === 'existing' }, 'Eksisterende branch'));
+
+    const buildOpts = () => {
+      if (draft.mode === 'existing') return { mode: 'existing', branch: existingSel.value };
+      const opts = { mode: 'new' };
+      const b = branchInput.value.trim();
+      if (b) opts.branch = b;
+      if (baseSel.value) opts.baseBranch = baseSel.value;
+      return opts;
+    };
+
+    return h('div', { id: 'worktreebar', class: 'wtbar' },
+      h('label', { for: 'wtmode', text: 'Worktree ' }), modeSel,
+      draft.mode === 'new'
+        ? [h('label', { for: 'wtbranch', text: 'Branch' }), branchInput, h('label', { for: 'wtbase', text: 'Udgangspunkt' }), baseSel]
+        : [h('label', { for: 'wtexisting', text: 'Vælg branch' }), existingSel],
+      h('div', { class: 'wtstartbtns' },
+        state.data.agents.map((a, i) => h('button', {
+          type: 'button', class: `btn small${i === 0 ? ' primary' : ''}`, 'data-key': `wtstart:${a.id}`,
+          onclick: () => start('agent', a.id, repo, null, null, buildOpts()),
+        }, `Start ${a.name} i worktree`)),
+        h('button', {
+          type: 'button', class: 'btn small', 'data-key': 'wtstart:shell',
+          onclick: () => start('shell', null, repo, null, null, buildOpts()),
+        }, 'Åbn terminal i worktree')));
   }
 
   function renderTabs() {
@@ -1080,7 +1198,7 @@
     const nodes = list.map(([id, label]) => tabButton(id, label));
     const repoSessions = sessionsFor(state.repo);
     if (repoSessions.length >= 2) nodes.push(tabButton('grid', `◫ Split (${repoSessions.length})`));
-    for (const s of repoSessions) nodes.push(tabButton(`term:${s.id}`, s.name, sessionBadge(s), modelChip(s)));
+    for (const s of repoSessions) nodes.push(tabButton(`term:${s.id}`, s.name, [worktreeChip(s, false), sessionBadge(s)], modelChip(s)));
     const key = focusKey();
     tabs.replaceChildren(...nodes);
     refocus(key);
@@ -1129,6 +1247,7 @@
       const s = state.data.sessions.find((x) => x.id === state.view.slice(5));
       if (s) {
         live.replaceChildren(...termStatus(s));
+        syncWorktreeChips(s);
         updateTermButtons(s);
         updateSplitLive();
         // Når agenten går fra at arbejde til at vente eller slutte, foldes resuméet ud af sig selv.
@@ -1146,7 +1265,7 @@
   function sessionRow(s, withRepo) {
     return h('li', { class: 'srow' },
       sessionBadge(s),
-      h('span', { class: 'sname' }, modelChip(s), withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name),
+      h('span', { class: 'sname' }, modelChip(s), withRepo ? h('strong', { text: s.repo }) : null, withRepo ? ' · ' : '', s.name, ' ', worktreeChip(s, true)),
       s.kind === 'agent' ? modelEffortChip(s) : null,
       h('span', { class: 'stime', text: s.endedAt ? `sluttede ${ago(s.endedAt)}` : `startet ${ago(s.startedAt)}` }),
       h('button', { type: 'button', class: 'btn small', 'data-key': `show:${s.id}`, 'aria-label': `Vis ${s.name} i ${s.repo}`, onclick: () => go(s.repo, `term:${s.id}`) }, 'Vis'));
@@ -1539,6 +1658,11 @@
     }
     if (!still()) return;
     const focus = h('textarea', { id: 'rolefocus', rows: '2', maxlength: '20000', placeholder: 'Fx: kig især på login og betaling – eller skriv opgaven til Udvikler / Issue-PO.' });
+    const wtBranch = h('input', { id: 'rolewtbranch', type: 'text', maxlength: '120', hidden: true, 'aria-label': 'Branchnavn til worktree', placeholder: 'fx feat/rolle-opgave (tom = auto)', autocomplete: 'off', spellcheck: 'false' });
+    const wtCheck = h('input', {
+      type: 'checkbox', id: 'rolewt',
+      onchange: () => { wtBranch.hidden = !wtCheck.checked; },
+    });
     const stacks = data.stacks.length ? data.stacks.map((x) => STACKTXT[x] || x).join(', ') : 'ingen kendt teknologi fundet';
     const card = (r) => h('li', { class: 'rolecard' },
       h('div', { class: 'rolehead' }, roleIcon(r.icon), h('h3', { class: 'rolename', text: r.name })),
@@ -1548,11 +1672,20 @@
         r.source === 'repo' ? chip('Rolle fra dette repo', 'ok') : null),
       h('button', { type: 'button', class: 'btn', 'data-key': `role:${r.id}`, 'aria-label': `Start ${r.name} i ${repo}`,
         disabled: !state.data.agents.length,
-        onclick: () => start('agent', $('roleagent').value, repo, r.id, focus.value.trim()) }, `Start ${r.name}`));
+        onclick: () => {
+          const wtOpts = wtCheck.checked
+            ? { mode: 'new', ...(wtBranch.value.trim() ? { branch: wtBranch.value.trim() } : {}) }
+            : null;
+          start('agent', $('roleagent').value, repo, r.id, focus.value.trim(), wtOpts);
+        } }, `Start ${r.name}`));
     panel.replaceChildren(
       h('div', { class: 'rolebar' },
         h('p', { class: 'sub' }, h('strong', { text: 'Fundet i repoet: ' }), stacks),
-        agentPicker('roleagent')),
+        h('div', { class: 'rolepickers' },
+          h('label', { class: 'wtcheck' }, wtCheck, ' Isoleret worktree'),
+          h('label', { class: 'sr', for: 'rolewtbranch', text: 'Branchnavn til worktree' }),
+          wtBranch,
+          agentPicker('roleagent'))),
       h('label', { class: 'rolefocuslabel', for: 'rolefocus', text: 'Fokus eller opgave (valgfrit)' }), focus,
       data.roles.length ? h('ul', { class: 'rolegrid' }, data.roles.map(card))
         : h('p', { class: 'empty', text: 'Der blev ikke fundet nogen roller. De ligger i mappen "roles" ved siden af Control Tower.' }),
@@ -2265,14 +2398,26 @@
 
   function updateTermButtons(s) {
     const box = $('termbuttons');
-    if (!box || box.dataset.running === String(s.exitCode == null)) return;
+    const wtState = s.worktree ? `${s.worktree.cleaned ? '1' : '0'}:${state.wtForcePrompt[s.id] ? '1' : '0'}` : '';
+    if (!box || (box.dataset.running === String(s.exitCode == null) && box.dataset.wtstate === wtState)) return;
     box.dataset.running = String(s.exitCode == null);
+    box.dataset.wtstate = wtState;
     const hadFocus = box.contains(document.activeElement);
     const again = s.kind === 'agent' && state.data.repos.some((r) => r.name === s.repo) && state.data.agents.some((a) => a.id === s.agentId)
       ? h('button', { type: 'button', class: 'btn small', onclick: () => start('agent', s.agentId, s.repo) }, 'Start igen') : null;
+    const wtBtns = s.exitCode != null && s.worktree && !s.worktree.cleaned ? [
+      h('button', { type: 'button', class: 'btn small primary', 'data-key': `termwtmerge:${s.id}`,
+        onclick: () => cleanupWorktree(s.id, { merge: true, deleteBranch: true }) }, 'Merge & ryd op'),
+      state.wtForcePrompt[s.id]
+        ? h('button', { type: 'button', class: 'btn small danger', 'data-key': `termwtforce:${s.id}`,
+          onclick: () => cleanupWorktree(s.id, { merge: false, deleteBranch: false, force: true }) }, 'Tving fjernelse')
+        : h('button', { type: 'button', class: 'btn small', 'data-key': `termwtclean:${s.id}`,
+          onclick: () => cleanupWorktree(s.id, { merge: false, deleteBranch: false }) }, 'Fjern worktree (behold branch)'),
+      confirmButton('Slet worktree & branch', 'Tryk igen for at slette', 'danger', () => cleanupWorktree(s.id, { merge: false, deleteBranch: true, force: true })),
+    ] : [];
     box.replaceChildren(...(s.exitCode == null
       ? [confirmButton('Stop', 'Tryk igen for at stoppe', 'danger', () => removeSession(s.id, false))]
-      : [again, h('button', { type: 'button', class: 'btn small', onclick: () => removeSession(s.id, true) }, 'Fjern fra listen')].filter(Boolean)));
+      : [...wtBtns, again, h('button', { type: 'button', class: 'btn small', onclick: () => removeSession(s.id, true) }, 'Fjern fra listen')].filter(Boolean)));
     const hint = $('termhint');
     if (hint) hint.textContent = s.kind === 'agent' && s.exitCode == null ? `»Venter på dig« / »Færdig« = ingen aktivitet i ${state.data.idleSeconds} sek. uden aktive opgaver · F6 forlader terminalen` : 'F6 forlader terminalen';
     // Knapper der kun giver mening mens agenten kører, vises ikke bagefter.
@@ -2361,6 +2506,7 @@
         h('span', { class: 'termpanetitle' },
           h('strong', { text: ps.name }),
           ps.repo !== state.repo ? chip(ps.repo, 'muted') : null,
+          worktreeChip(ps, false),
           h('span', { class: 'termstatus', 'data-panestatus': ps.id }, termStatus(ps))),
         h('span', { class: 'termpaneactions' },
           h('span', { 'data-panequick': ps.id, class: 'quickactions', style: 'margin-top:0' }, quickApproveButtons(ps, 'pq')),
@@ -2400,7 +2546,7 @@
     panel.className = 'panel term';
     panel.replaceChildren(
       h('div', { class: 'panelbar' },
-        h('span', { class: 'termtitle' }, h('strong', { text: s.name }), ` i ${s.repo}`),
+        h('span', { class: 'termtitle' }, h('strong', { text: s.name }), ` i ${s.repo}`, s.worktree ? ' ' : null, worktreeChip(s, true)),
         h('span', { id: 'termstatus', class: 'termstatus' }, termStatus(s)),
         h('span', { class: 'hint', id: 'termhint' }),
         splitPicker(s, splitSession),
@@ -2480,6 +2626,7 @@
         h('div', { class: 'termcellbar' },
           h('span', { class: 'termcellhead' },
             modelChip(s), h('strong', { text: s.name }),
+            worktreeChip(s, false),
             !repoScope ? h('button', { type: 'button', class: 'linkbtn', onclick: () => go(s.repo, 'overview') }, s.repo) : null,
             h('span', { class: 'termstatus', 'data-cellstatus': s.id }, termStatus(s))),
           h('span', { class: 'termcellactions' },
@@ -2514,6 +2661,7 @@
       const st = STATUS[s.status] || STATUS.afsluttet;
       const cell = grid.querySelector(`[data-cell="${s.id}"]`);
       if (cell) cell.className = `termcell ${st.cls}`;
+      syncWorktreeChips(s);
       const statusEl = grid.querySelector(`[data-cellstatus="${s.id}"]`);
       if (statusEl) statusEl.replaceChildren(...termStatus(s));
       const quickEl = grid.querySelector(`[data-cellquick="${s.id}"]`);
@@ -2550,18 +2698,54 @@
     message: '/compact sendt til agenten.',
   });
 
-  async function start(kind, agentId, repoName, roleId, input) {
+  async function start(kind, agentId, repoName, roleId, input, worktree) {
     const repo = repoName || state.repo;
     try {
       const body = { repo, kind, agentId };
       if (roleId) { body.roleId = roleId; if (input) body.input = input; }
+      if (worktree) body.worktree = worktree;
       const s = await api('/api/sessions', { method: 'POST', body });
+      if (worktree) {
+        state.wtOpen[repo] = false;
+        if (state.wtDraft[repo]) {
+          state.wtDraft[repo].branch = '';
+          state.wtDraft[repo].existing = '';
+        }
+      }
       if (roleId) toast(`${s.name} starter. Opgaven indsættes, når agenten er klar – læs den, og tryk Enter.`);
       state.sig = null;
       await refresh();
       if (repoName) go(repo, `term:${s.id}`);
-      else if (state.repo === repo) { state.view = `term:${s.id}`; renderTabs(); renderPanel(); }
+      else if (state.repo === repo) { state.view = `term:${s.id}`; renderMain(); }
     } catch (err) { toast(err.message, true); }
+  }
+
+  async function cleanupWorktree(id, opts) {
+    try {
+      const res = await api(`/api/sessions/${id}/worktree/cleanup`, { method: 'POST', body: opts });
+      delete state.wtForcePrompt[id];
+      state.sig = null;
+      await refresh();
+      if (state.view === `term:${id}` && $('termbuttons')) {
+        const s = state.data && state.data.sessions.find((x) => x.id === id);
+        if (s) { $('termbuttons').dataset.wtstate = ''; updateTermButtons(s); }
+      }
+      if (res.merged) {
+        toast(`Mergede ${res.branch} ind i ${res.targetBranch} og ryddede worktree op${res.branchDeleted ? ' (branch slettet)' : ''}.`);
+      } else {
+        toast(`Worktree ryddet op${res.branchDeleted ? ` (branch ${res.branch} slettet)` : ` (branch ${res.branch} beholdt)`}.`);
+      }
+    } catch (err) {
+      if (err.data && err.data.dirty && !opts.force && !opts.merge) {
+        state.wtForcePrompt[id] = true;
+        renderLive();
+        if (state.view === `term:${id}` && $('termbuttons')) {
+          const s = state.data && state.data.sessions.find((x) => x.id === id);
+          if (s) { $('termbuttons').dataset.wtstate = ''; updateTermButtons(s); }
+        }
+      }
+      toast(err.message, true);
+    }
   }
 
   async function removeSession(id, removed) {
@@ -2814,6 +2998,14 @@
           keywords: `start agent ${a.id} ${a.name} ${repoName}`,
           boost,
           run: () => start('agent', a.id, repoName),
+        });
+        items.push({
+          group: 'Worktree',
+          title: `Start ${a.name} i ny worktree i ${repoName}`,
+          sub: 'Isoleret git worktree med ny branch',
+          keywords: `worktree isoleret branch start agent ${a.id} ${a.name} ${repoName}`,
+          boost,
+          run: () => start('agent', a.id, repoName, null, null, { mode: 'new' }),
         });
       }
       items.push(

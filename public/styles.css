@@ -448,3 +448,16 @@ h2:focus { outline: none; }
 .robot .modelmark circle { fill: var(--model); stroke: var(--panel2); stroke-width: 1.5; }
 .robot .modelmark text { fill: #fff; font: 700 9px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
 .robot.mini .modelmark { display: none; }
+
+/* ---- worktree ---- */
+.wtchip { font-family: var(--mono); border-color: #365a82; color: var(--blue); }
+.wtchip.muted { border-color: var(--line2); color: var(--muted); }
+.deskwt { margin-top: 4px; }
+.wtbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line2); border-left: 4px solid var(--blue); border-radius: var(--r); }
+.wtbar label { font-size: 13px; color: var(--muted); font-weight: 600; }
+.wtbar input[type="text"], .wtbar select { background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 5px 8px; font-size: 13px; color: var(--text); }
+.wtbar input[type="text"] { min-width: 220px; }
+.wtstartbtns { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.rolepickers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wtcheck { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+#rolewtbranch { background: var(--bg); border: 1px solid var(--ctl); border-radius: 6px; padding: 5px 8px; font-size: 13px; color: var(--text); min-width: 200px; }
